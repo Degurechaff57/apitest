@@ -45,6 +45,9 @@ plan:
 # Execution
 base_url: "http://localhost:8080"
 coverage: "happy-path"            # smoke | happy-path | full
+execution:
+  mode: "mock"                    # mock | real
+  mock_server_port: null          # auto-assigned if omitted
 
 # Report
 report:
@@ -296,6 +299,69 @@ class TestUsers:
 
 The executor invokes: `pytest tests/ --alluredir=allure-results/`
 
+### Execution Modes
+
+Tests run in one of two modes, configured via `.apitest.yaml` or `--mode` flag.
+The generated test code is identical in both modes — only the target changes.
+
+#### Mock Mode (default)
+
+For first-time users, offline development, and shift-left testing before the real API exists.
+
+```
+apitest run --mode mock
+```
+
+1. CLI parses the API doc and generates a **Flask-based mock server** from the spec
+2. Mock server starts on `localhost:<port>` (auto-assigned or configured)
+3. `base_url` is overridden to point at the mock server
+4. Tests run against the mock, Allure results collected
+5. Mock server is stopped
+
+**Mock server behavior:**
+- Routes generated from OpenAPI paths and methods
+- Response bodies generated from schema examples (or auto-generated from types)
+- **In-memory SQLite store** for stateful CRUD — POST writes, GET reads, DELETE removes
+- Schema validation on request bodies (returns 400 for mismatches)
+- Auth simulation: accepts any well-formed Bearer token, returns mock JWT
+- Realistic error responses: 404 for missing resources, 409 for duplicates
+
+**Limitations:** No real DB verification, no real auth integration, no external service dependencies.
+
+#### Real Mode
+
+For testing against live APIs with real infrastructure.
+
+```
+apitest run --mode real
+```
+
+1. Tests run against the configured `base_url`
+2. Auth tokens come from environment variables (as configured)
+3. Cleanup actually matters — proper setup/teardown required
+4. Optional DB connection for data consistency verification (v1.5+)
+
+**Config:**
+```yaml
+execution:
+  mode: "mock"               # mock | real
+  mock_server_port: null     # auto-assigned if omitted
+  db:                        # real mode only (v1.5+)
+    type: "postgresql"
+    url: "${DATABASE_URL}"
+```
+
+#### Mode Comparison
+
+| Aspect | Mock | Real |
+|---|---|---|
+| Target | Local Flask server | Live API at base_url |
+| Auth | Accepts any well-formed token | Real token from env vars |
+| DB | In-memory SQLite | Optional DB connection (v1.5+) |
+| Side effects | Ephemeral, lost on stop | Persistent, needs cleanup |
+| Use case | First try, CI, shift-left | Actual API testing, integration |
+| Generated tests | Same | Same |
+
 ## Report
 
 Allure CLI (Java-based) is required for HTML report generation. If not installed, the CLI prints
@@ -334,6 +400,7 @@ After execution:
 | Report | `allure-pytest` + Allure CLI |
 | LLM clients | `openai` + `anthropic` SDKs |
 | OpenAPI parsing | `openapi-core` + `prance` |
+| Mock server | `flask` + in-memory SQLite |
 | Excel output | `openpyxl` |
 | YAML output | `pyyaml` |
 | Package management | `hatchling` or `poetry` |
