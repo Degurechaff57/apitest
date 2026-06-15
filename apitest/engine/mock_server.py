@@ -4,11 +4,12 @@ import re
 import socket
 import sqlite3
 import threading
-import uuid
 from copy import deepcopy
 from pathlib import Path
 
 from flask import Flask, request, jsonify
+
+from apitest.engine.fake_data import generate_fake_value as _gen_fake, _next_auto_id
 
 
 def _get_free_port() -> int:
@@ -117,110 +118,21 @@ def _get_request_body_schema(operation: dict, schemas: dict) -> dict | None:
     return None
 
 
-# ---- Fake data generator ----
-
-_SAMPLE_NAMES = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace",
-                 "Henry", "Iris", "Jack", "Kate", "Leo", "Mia", "Noah", "Olivia"]
-_SAMPLE_TAGS = ["摄影", "旅行", "探店", "美食", "露营", "装备", "穿搭", "美妆",
-                "读书", "运动", "音乐", "电影", "科技", "生活", "萌宠"]
-_SAMPLE_TITLES = ["周末露营装备推荐", "探店藏在巷子里的咖啡馆", "夏日护肤好物分享",
-                  "城市周边一日游攻略", "新入手的相机测评", "在家也能做的美味甜点"]
-_SAMPLE_CONTENTS = ["最近入手的露营装备分享...", "这家店环境很好，推荐给大家",
-                    "用了两周后的真实感受，值得入手", "详细攻略，建议收藏"]
-_next_id = 1001
-
-
-def _next_auto_id() -> int:
-    global _next_id
-    _next_id += 1
-    return _next_id
-
+# ---- Fake data generator adapter ----
 
 def _generate_fake_value(prop_name: str, prop_schema: dict, schemas: dict) -> object:
     """Generate a realistic fake value for a single property based on its schema."""
     resolved = _resolve_schema(prop_schema, schemas)
-    prop_type = resolved.get("type", "string")
-    fmt = resolved.get("format", "")
-    enum_vals = resolved.get("enum")
-
-    if enum_vals:
-        return random.choice(enum_vals)
-
-    if prop_type == "integer" or prop_type == "number":
-        minimum = resolved.get("minimum", 0)
-        maximum = resolved.get("maximum", 99999)
-        return random.randint(int(minimum), min(int(maximum), 99999))
-
-    if prop_type == "boolean":
-        return random.choice([True, False])
-
-    if prop_type == "array":
-        item_schema = resolved.get("items", {"type": "string"})
-        count = random.randint(1, 3)
-        return [_generate_fake_value(f"{prop_name}[]", item_schema, schemas) for _ in range(count)]
-
-    if prop_type == "object":
-        props = resolved.get("properties", {})
-        return {k: _generate_fake_value(k, v, schemas) for k, v in props.items()}
-
-    # string type — use name/format hints
-    name_lower = prop_name.lower()
-
-    if fmt == "email" or "email" in name_lower:
-        return f"user{_next_auto_id()}@example.com"
-    if fmt == "uri" or fmt == "url" or "avatar" in name_lower or "cover" in name_lower or "image" in name_lower:
-        return f"https://cdn.example.com/{prop_name}/{_next_auto_id()}.jpg"
-    if fmt == "date-time" or "time" in name_lower:
-        return "2025-06-15 14:30:00"
-    if fmt == "date" or "date" in name_lower:
-        return "2025-06-15"
-    if fmt == "uuid" or "id" in name_lower:
-        return str(_next_auto_id())
-    if "phone" in name_lower:
-        return f"138{random.randint(10000000, 99999999)}"
-    if "token" in name_lower:
-        return f"eyJ{random.randint(100000, 999999)}.{random.randint(100000, 999999)}"
-    if "name" in name_lower or "nickname" in name_lower:
-        return random.choice(_SAMPLE_NAMES)
-    if "title" in name_lower:
-        return random.choice(_SAMPLE_TITLES)
-    if "content" in name_lower or "bio" in name_lower or "description" in name_lower:
-        return random.choice(_SAMPLE_CONTENTS)
-    if "tag" in name_lower:
-        return random.sample(_SAMPLE_TAGS, min(3, len(_SAMPLE_TAGS)))
-    if "code" in name_lower:
-        return "123456"
-    if "message" in name_lower:
-        return "操作成功"
-    if "type" in name_lower:
-        return "personal"
-    if "gender" in name_lower:
-        return random.choice([0, 1, 2])
-    if "count" in name_lower or "total" in name_lower:
-        return random.randint(100, 20000)
-    if "price" in name_lower:
-        return round(random.uniform(9.9, 999.0), 2)
-    if "status" in name_lower or "visibility" in name_lower:
-        return "public"
-    if "page" in name_lower:
-        return 1
-    if "size" in name_lower:
-        return 20
-    if "has" in name_lower and "more" in name_lower:
-        return True
-    if name_lower.startswith("has") or name_lower.startswith("is") or name_lower.startswith("allow") or name_lower.startswith("show"):
-        return True
-    if "role" in name_lower:
-        return "admin"
-    if "keyword" in name_lower:
-        return "露营"
-    if "tab" in name_lower:
-        return "notes"
-
-    # Generic string
-    if "desc" in name_lower:
-        return "这是一个示例描述"
-    return f"sample-{prop_name}"
+    return _gen_fake(
+        prop_name,
+        schema_type=resolved.get("type", "string"),
+        enum=resolved.get("enum"),
+        minimum=resolved.get("minimum"),
+        maximum=resolved.get("maximum"),
+        min_length=resolved.get("minLength"),
+        max_length=resolved.get("maxLength"),
+        fmt=resolved.get("format", ""),
+    )
 
 
 def _generate_fake_data(schema: dict, schemas: dict) -> dict:
@@ -368,9 +280,9 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
                 (resource, resource_id, json.dumps(data)),
             )
             db.commit()
-            # Return response matching the success schema
             resp = _make_response_data(operation, schemas, data)
-            return jsonify(resp), 201
+            success_code = _get_success_status(operation.get("responses", {}))
+            return jsonify(resp), success_code
 
         elif method == "put":
             data = request.get_json(silent=True) or {}
@@ -459,6 +371,17 @@ def _is_list_endpoint(operation: dict, schemas: dict) -> bool:
         return True
     # No data wrapper at all — assume single object
     return False
+
+
+def _get_success_status(responses: dict) -> int:
+    for status_str in responses:
+        try:
+            code = int(status_str)
+            if 200 <= code < 300:
+                return code
+        except ValueError:
+            continue
+    return 200
 
 
 def _extract_resource(path: str) -> str:
