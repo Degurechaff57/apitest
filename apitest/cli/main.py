@@ -242,7 +242,9 @@ def go(
     mock_server = None
     if exec_mode == "mock":
         import yaml
-        with open(config.api_doc) as f:
+        # Use the CLI arg if it's OpenAPI, otherwise fall back to config
+        mock_spec_path = api_doc if detect_format(api_doc) == "openapi" else config.api_doc
+        with open(mock_spec_path) as f:
             spec = yaml.safe_load(f)
         mock_app = create_mock_app(spec)
         mock_server = MockServer(mock_app, port=config.execution_mock_server_port)

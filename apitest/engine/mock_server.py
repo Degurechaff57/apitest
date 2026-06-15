@@ -1,8 +1,12 @@
 import json
+import random
+import re
 import socket
 import sqlite3
 import threading
 import uuid
+from copy import deepcopy
+from pathlib import Path
 
 from flask import Flask, request, jsonify
 
@@ -45,7 +49,7 @@ class MockServer:
 
 
 def create_mock_app(spec: dict) -> Flask:
-    """Create a Flask app that mocks the given OpenAPI spec."""
+    """Create a Flask app that mocks the given OpenAPI spec with schema-aware responses."""
     app = Flask(__name__)
 
     db = sqlite3.connect(":memory:", check_same_thread=False)
@@ -54,6 +58,8 @@ def create_mock_app(spec: dict) -> Flask:
                "resource TEXT, resource_id TEXT, data TEXT, "
                "PRIMARY KEY (resource, resource_id))")
 
+    # Build a lookup: (method, path) -> response schema + examples
+    schemas = _extract_schemas(spec)
     paths = spec.get("paths", {})
 
     for url_path, methods in paths.items():
@@ -63,12 +69,243 @@ def create_mock_app(spec: dict) -> Flask:
             operation = methods.get(method)
             if operation is None:
                 continue
-            _register_route(app, method, flask_path, url_path, operation, db)
+            _register_route(app, method, flask_path, url_path, operation, db, schemas)
 
     return app
 
 
-def _register_route(app, method, flask_path, spec_path, operation, db):
+def _extract_schemas(spec: dict) -> dict:
+    """Extract all named schemas from components/schemas, resolving $ref chains."""
+    return spec.get("components", {}).get("schemas", {})
+
+
+def _resolve_schema(schema_obj: dict, schemas: dict) -> dict:
+    """Resolve $ref references in a schema object."""
+    if not isinstance(schema_obj, dict):
+        return {"type": "string"}
+    if "$ref" in schema_obj:
+        ref_name = schema_obj["$ref"].split("/")[-1]
+        resolved = schemas.get(ref_name, {})
+        return _resolve_schema(resolved, schemas)
+    return schema_obj
+
+
+def _get_response_schema(operation: dict, schemas: dict) -> dict | None:
+    """Extract the JSON response schema for the first 2xx response."""
+    for status_str, resp in operation.get("responses", {}).items():
+        try:
+            code = int(status_str)
+        except ValueError:
+            continue
+        if 200 <= code < 300:
+            content = resp.get("content", {})
+            json_content = content.get("application/json", {})
+            schema = json_content.get("schema", {})
+            if schema:
+                return _resolve_schema(schema, schemas)
+    return None
+
+
+def _get_request_body_schema(operation: dict, schemas: dict) -> dict | None:
+    """Extract the JSON request body schema."""
+    rb = operation.get("requestBody", {})
+    content = rb.get("content", {})
+    json_content = content.get("application/json", {})
+    schema = json_content.get("schema", {})
+    if schema:
+        return _resolve_schema(schema, schemas)
+    return None
+
+
+# ---- Fake data generator ----
+
+_SAMPLE_NAMES = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace",
+                 "Henry", "Iris", "Jack", "Kate", "Leo", "Mia", "Noah", "Olivia"]
+_SAMPLE_TAGS = ["摄影", "旅行", "探店", "美食", "露营", "装备", "穿搭", "美妆",
+                "读书", "运动", "音乐", "电影", "科技", "生活", "萌宠"]
+_SAMPLE_TITLES = ["周末露营装备推荐", "探店藏在巷子里的咖啡馆", "夏日护肤好物分享",
+                  "城市周边一日游攻略", "新入手的相机测评", "在家也能做的美味甜点"]
+_SAMPLE_CONTENTS = ["最近入手的露营装备分享...", "这家店环境很好，推荐给大家",
+                    "用了两周后的真实感受，值得入手", "详细攻略，建议收藏"]
+_next_id = 1001
+
+
+def _next_auto_id() -> int:
+    global _next_id
+    _next_id += 1
+    return _next_id
+
+
+def _generate_fake_value(prop_name: str, prop_schema: dict, schemas: dict) -> object:
+    """Generate a realistic fake value for a single property based on its schema."""
+    resolved = _resolve_schema(prop_schema, schemas)
+    prop_type = resolved.get("type", "string")
+    fmt = resolved.get("format", "")
+    enum_vals = resolved.get("enum")
+
+    if enum_vals:
+        return random.choice(enum_vals)
+
+    if prop_type == "integer" or prop_type == "number":
+        minimum = resolved.get("minimum", 0)
+        maximum = resolved.get("maximum", 99999)
+        return random.randint(int(minimum), min(int(maximum), 99999))
+
+    if prop_type == "boolean":
+        return random.choice([True, False])
+
+    if prop_type == "array":
+        item_schema = resolved.get("items", {"type": "string"})
+        count = random.randint(1, 3)
+        return [_generate_fake_value(f"{prop_name}[]", item_schema, schemas) for _ in range(count)]
+
+    if prop_type == "object":
+        props = resolved.get("properties", {})
+        return {k: _generate_fake_value(k, v, schemas) for k, v in props.items()}
+
+    # string type — use name/format hints
+    name_lower = prop_name.lower()
+
+    if fmt == "email" or "email" in name_lower:
+        return f"user{_next_auto_id()}@example.com"
+    if fmt == "uri" or fmt == "url" or "avatar" in name_lower or "cover" in name_lower or "image" in name_lower:
+        return f"https://cdn.example.com/{prop_name}/{_next_auto_id()}.jpg"
+    if fmt == "date-time" or "time" in name_lower:
+        return "2025-06-15 14:30:00"
+    if fmt == "date" or "date" in name_lower:
+        return "2025-06-15"
+    if fmt == "uuid" or "id" in name_lower:
+        return str(_next_auto_id())
+    if "phone" in name_lower:
+        return f"138{random.randint(10000000, 99999999)}"
+    if "token" in name_lower:
+        return f"eyJ{random.randint(100000, 999999)}.{random.randint(100000, 999999)}"
+    if "name" in name_lower or "nickname" in name_lower:
+        return random.choice(_SAMPLE_NAMES)
+    if "title" in name_lower:
+        return random.choice(_SAMPLE_TITLES)
+    if "content" in name_lower or "bio" in name_lower or "description" in name_lower:
+        return random.choice(_SAMPLE_CONTENTS)
+    if "tag" in name_lower:
+        return random.sample(_SAMPLE_TAGS, min(3, len(_SAMPLE_TAGS)))
+    if "code" in name_lower:
+        return "123456"
+    if "message" in name_lower:
+        return "操作成功"
+    if "type" in name_lower:
+        return "personal"
+    if "gender" in name_lower:
+        return random.choice([0, 1, 2])
+    if "count" in name_lower or "total" in name_lower:
+        return random.randint(100, 20000)
+    if "price" in name_lower:
+        return round(random.uniform(9.9, 999.0), 2)
+    if "status" in name_lower or "visibility" in name_lower:
+        return "public"
+    if "page" in name_lower:
+        return 1
+    if "size" in name_lower:
+        return 20
+    if "has" in name_lower and "more" in name_lower:
+        return True
+    if name_lower.startswith("has") or name_lower.startswith("is") or name_lower.startswith("allow") or name_lower.startswith("show"):
+        return True
+    if "role" in name_lower:
+        return "admin"
+    if "keyword" in name_lower:
+        return "露营"
+    if "tab" in name_lower:
+        return "notes"
+
+    # Generic string
+    if "desc" in name_lower:
+        return "这是一个示例描述"
+    return f"sample-{prop_name}"
+
+
+def _generate_fake_data(schema: dict, schemas: dict) -> dict:
+    """Generate a complete fake data object from a schema."""
+    resolved = _resolve_schema(schema, schemas)
+
+    if resolved.get("type") == "array":
+        item_schema = resolved.get("items", {"type": "object", "properties": {}})
+        count = random.randint(1, 3)
+        return [_generate_fake_data(item_schema, schemas) for _ in range(count)]
+
+    if resolved.get("type") == "object" or "properties" in resolved:
+        props = resolved.get("properties", {})
+        result = {}
+        for name, prop_schema in props.items():
+            result[name] = _generate_fake_value(name, prop_schema, schemas)
+        # Add an id if not present
+        if "id" not in result and "Id" not in str(list(props.keys())):
+            pass  # Only add id for top-level objects
+        return result
+
+    return {}
+
+
+def _make_response_data(operation: dict, schemas: dict, stored_data: dict | None = None,
+                        is_list: bool = False) -> object:
+    """Build response data matching the response schema, merging with stored data if available."""
+    resp_schema = _get_response_schema(operation, schemas)
+    req_schema = _get_request_body_schema(operation, schemas)
+
+    # Use the response schema if available, otherwise fall back to request body schema
+    schema = resp_schema or req_schema
+    if schema is None:
+        # No schema at all — return stored data or empty
+        if stored_data:
+            return stored_data
+        return [] if is_list else {}
+
+    # Generate the response wrapper
+    resp_obj = _resolve_schema(schema, schemas)
+
+    # Handle wrapped responses like {code, message, data: {...}}
+    props = resp_obj.get("properties", {})
+    if "code" in props and "data" in props:
+        data_schema = props["data"]
+        data_resolved = _resolve_schema(data_schema, schemas)
+
+        if is_list:
+            # Paginated list endpoint: data is an object with {total, page, list, ...}
+            fake_data = _generate_fake_data(data_resolved, schemas)
+            # Ensure list field has items
+            data_props = data_resolved.get("properties", {})
+            if "list" in data_props:
+                item_schema = data_props["list"].get("items", {"type": "object", "properties": {}})
+                items = [_generate_fake_data(item_schema, schemas)
+                        for _ in range(random.randint(1, 3))]
+                if isinstance(fake_data, dict):
+                    fake_data["list"] = items
+            return {
+                "code": 200,
+                "message": "success",
+                "data": fake_data,
+            }
+        else:
+            # Single item endpoint: data is an object
+            if stored_data:
+                fake = _generate_fake_data(data_resolved, schemas)
+                if isinstance(fake, dict):
+                    fake.update(stored_data)
+                return {"code": 200, "message": "success", "data": fake}
+            else:
+                fake = _generate_fake_data(data_resolved, schemas)
+                return {"code": 200, "message": "success", "data": fake}
+
+    # Unwrapped response
+    if stored_data:
+        return stored_data
+    if is_list:
+        return [_generate_fake_data(schema, schemas) for _ in range(random.randint(1, 3))]
+    return _generate_fake_data(schema, schemas)
+
+
+# ---- Route registration ----
+
+def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
     has_path_param = "{" in spec_path
 
     body_required_fields = []
@@ -78,6 +315,7 @@ def _register_route(app, method, flask_path, spec_path, operation, db):
         json_content = content.get("application/json", {})
         body_schema = json_content.get("schema", {})
         if body_schema:
+            body_schema = _resolve_schema(body_schema, schemas)
             body_required_fields = body_schema.get("required", [])
 
     resource = _extract_resource(spec_path)
@@ -91,28 +329,48 @@ def _register_route(app, method, flask_path, spec_path, operation, db):
                     (resource, str(resource_id)),
                 ).fetchone()
                 if row:
-                    return jsonify(json.loads(row["data"])), 200
-                return jsonify({"error": "not found"}), 404
+                    stored = json.loads(row["data"])
+                    return jsonify(_make_response_data(operation, schemas, stored)), 200
+                return jsonify({"code": 404, "message": "not found"}), 404
             else:
                 rows = db.execute(
                     "SELECT data FROM store WHERE resource=?", (resource,)
                 ).fetchall()
-                return jsonify([json.loads(r["data"]) for r in rows]), 200
+                # Determine if this is a list or single-item endpoint from the schema
+                is_list = _is_list_endpoint(operation, schemas)
+                if rows:
+                    stored_list = [json.loads(r["data"]) for r in rows]
+                    if is_list:
+                        resp_schema = _get_response_schema(operation, schemas)
+                        if resp_schema:
+                            resp_props = _resolve_schema(resp_schema, schemas).get("properties", {})
+                            if "data" in resp_props:
+                                return jsonify({
+                                    "code": 200, "message": "success",
+                                    "data": stored_list
+                                }), 200
+                        return jsonify(stored_list), 200
+                    else:
+                        return jsonify(_make_response_data(operation, schemas, stored_list[0])), 200
+                # No stored data: generate fake data from schema
+                return jsonify(_make_response_data(operation, schemas, is_list=is_list)), 200
 
         elif method == "post":
             data = request.get_json(silent=True) or {}
             if body_required_fields:
                 missing = [f for f in body_required_fields if f not in data]
                 if missing:
-                    return jsonify({"error": f"missing required fields: {missing}"}), 400
-            resource_id = data.get("id") or str(uuid.uuid4())[:8]
+                    return jsonify({"code": 400, "message": f"missing required fields: {missing}"}), 400
+            resource_id = str(_next_auto_id())
             data["id"] = resource_id
             db.execute(
                 "INSERT OR REPLACE INTO store (resource, resource_id, data) VALUES (?, ?, ?)",
                 (resource, resource_id, json.dumps(data)),
             )
             db.commit()
-            return jsonify(data), 201
+            # Return response matching the success schema
+            resp = _make_response_data(operation, schemas, data)
+            return jsonify(resp), 201
 
         elif method == "put":
             data = request.get_json(silent=True) or {}
@@ -123,31 +381,84 @@ def _register_route(app, method, flask_path, spec_path, operation, db):
                     (resource, str(resource_id)),
                 ).fetchone()
                 if not row:
-                    return jsonify({"error": "not found"}), 404
+                    return jsonify({"code": 404, "message": "not found"}), 404
                 existing = json.loads(row["data"])
                 existing.update(data)
-                existing["id"] = resource_id
                 db.execute(
                     "INSERT OR REPLACE INTO store (resource, resource_id, data) VALUES (?, ?, ?)",
                     (resource, resource_id, json.dumps(existing)),
                 )
                 db.commit()
-                return jsonify(existing), 200
-            return jsonify({"error": "put requires an id"}), 400
+                resp = _make_response_data(operation, schemas, existing)
+                return jsonify(resp), 200
+            return jsonify({"code": 400, "message": "put requires an id"}), 400
 
         elif method == "delete":
             if has_path_param:
                 resource_id = list(kwargs.values())[0] if kwargs else None
+                row = db.execute(
+                    "SELECT data FROM store WHERE resource=? AND resource_id=?",
+                    (resource, str(resource_id)),
+                ).fetchone()
+                if not row:
+                    return jsonify({"code": 404, "message": "not found"}), 404
                 db.execute(
                     "DELETE FROM store WHERE resource=? AND resource_id=?",
                     (resource, str(resource_id)),
                 )
                 db.commit()
                 return "", 204
-            return jsonify({"error": "delete requires an id"}), 400
+            return jsonify({"code": 400, "message": "delete requires an id"}), 400
+
+        elif method == "patch":
+            data = request.get_json(silent=True) or {}
+            if has_path_param:
+                resource_id = list(kwargs.values())[0] if kwargs else None
+                row = db.execute(
+                    "SELECT data FROM store WHERE resource=? AND resource_id=?",
+                    (resource, str(resource_id)),
+                ).fetchone()
+                if not row:
+                    return jsonify({"code": 404, "message": "not found"}), 404
+                existing = json.loads(row["data"])
+                existing.update(data)
+                db.execute(
+                    "INSERT OR REPLACE INTO store (resource, resource_id, data) VALUES (?, ?, ?)",
+                    (resource, resource_id, json.dumps(existing)),
+                )
+                db.commit()
+                resp = _make_response_data(operation, schemas, existing)
+                return jsonify(resp), 200
+            return jsonify({"code": 400, "message": "patch requires an id"}), 400
 
     handler.__name__ = f"{method}_{flask_path}"
     app.add_url_rule(flask_path, f"{method}_{flask_path}", handler, methods=[method.upper()])
+
+
+def _is_list_endpoint(operation: dict, schemas: dict) -> bool:
+    """Heuristic: check if the response schema indicates a list/paginated endpoint."""
+    resp_schema = _get_response_schema(operation, schemas)
+    if resp_schema is None:
+        # No schema — default to list for GET without path param
+        return True
+    resolved = _resolve_schema(resp_schema, schemas)
+    props = resolved.get("properties", {})
+    if "data" in props:
+        data_schema = _resolve_schema(props["data"], schemas)
+        # If data has pagination fields (total, page, list) or is an array, it's a list
+        if data_schema.get("type") == "array":
+            return True
+        data_props = data_schema.get("properties", {})
+        if "list" in data_props or "total" in data_props:
+            return True
+        # If data is a single object (no list/total), it's a single-item endpoint
+        if data_props:
+            return False
+    # If the top-level type is array, it's a list
+    if resolved.get("type") == "array":
+        return True
+    # No data wrapper at all — assume single object
+    return False
 
 
 def _extract_resource(path: str) -> str:

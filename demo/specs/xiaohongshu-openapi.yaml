@@ -34,8 +34,16 @@ paths:
       responses:
         "200":
           description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
         "401":
           description: 验证码错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   # ===== 2. 用户信息 =====
   /api/user/profile:
@@ -55,8 +63,16 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfileResponse"
         "404":
           description: 用户不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     put:
       operationId: updateUserProfile
       summary: 编辑个人资料
@@ -85,8 +101,16 @@ paths:
       responses:
         "200":
           description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateProfileResponse"
         "409":
           description: 昵称已被使用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /api/user/avatar:
     post:
@@ -104,8 +128,16 @@ paths:
       responses:
         "200":
           description: 上传成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvatarResponse"
         "400":
           description: 文件过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   # ===== 3. 关注系统 =====
   /api/user/follow:
@@ -128,8 +160,16 @@ paths:
       responses:
         "200":
           description: 关注成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FollowResponse"
         "400":
           description: 关注已达上限
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     delete:
       operationId: unfollowUser
       summary: 取关用户
@@ -149,6 +189,10 @@ paths:
       responses:
         "200":
           description: 已取消关注
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
 
   /api/user/followers:
     get:
@@ -178,6 +222,10 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FollowerListResponse"
 
   # ===== 4. 内容模块 =====
   /api/user/notes:
@@ -215,6 +263,10 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteListResponse"
 
   /api/notes/{noteId}:
     get:
@@ -232,8 +284,16 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteDetailResponse"
         "404":
           description: 笔记不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /api/notes/{noteId}/like:
     post:
@@ -251,6 +311,10 @@ paths:
       responses:
         "200":
           description: 点赞成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LikeResponse"
     delete:
       operationId: unlikeNote
       summary: 取消点赞
@@ -266,6 +330,10 @@ paths:
       responses:
         "200":
           description: 已取消点赞
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
 
   /api/notes/{noteId}/collect:
     post:
@@ -283,6 +351,10 @@ paths:
       responses:
         "200":
           description: 收藏成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectResponse"
 
   /api/notes/{noteId}/comments:
     get:
@@ -310,6 +382,10 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentListResponse"
     post:
       operationId: createComment
       summary: 发表评论
@@ -339,8 +415,16 @@ paths:
       responses:
         "200":
           description: 评论成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentResponse"
         "400":
           description: 评论包含违规内容
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   # ===== 5. 搜索 =====
   /api/search:
@@ -376,6 +460,10 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
 
   # ===== 6. 隐私设置 =====
   /api/user/privacy:
@@ -388,6 +476,10 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivacyResponse"
     put:
       operationId: updatePrivacySettings
       summary: 更新隐私设置
@@ -410,6 +502,10 @@ paths:
       responses:
         "200":
           description: 隐私设置已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
 
 components:
   securitySchemes:
@@ -417,3 +513,362 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+
+    MessageResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+
+    LoginResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+            userId:
+              type: integer
+            nickname:
+              type: string
+
+    UserProfileResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        data:
+          $ref: "#/components/schemas/UserProfile"
+
+    UserProfile:
+      type: object
+      properties:
+        userId:
+          type: integer
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: url
+        bio:
+          type: string
+        gender:
+          type: integer
+        followerCount:
+          type: integer
+        followingCount:
+          type: integer
+        noteCount:
+          type: integer
+        verified:
+          type: object
+          properties:
+            type:
+              type: string
+            desc:
+              type: string
+        tags:
+          type: array
+          items:
+            type: string
+        joinDate:
+          type: string
+          format: date
+
+    UpdateProfileResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            nickname:
+              type: string
+            bio:
+              type: string
+
+    AvatarResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            avatarUrl:
+              type: string
+              format: url
+
+    FollowResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            isMutual:
+              type: boolean
+
+    FollowerListResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        data:
+          type: object
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            pageSize:
+              type: integer
+            list:
+              type: array
+              items:
+                $ref: "#/components/schemas/FollowerUser"
+
+    FollowerUser:
+      type: object
+      properties:
+        userId:
+          type: integer
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: url
+
+    NoteListResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        data:
+          type: object
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            pageSize:
+              type: integer
+            hasMore:
+              type: boolean
+            list:
+              type: array
+              items:
+                $ref: "#/components/schemas/NoteSummary"
+
+    NoteSummary:
+      type: object
+      properties:
+        noteId:
+          type: integer
+        title:
+          type: string
+        cover:
+          type: string
+          format: url
+        likeCount:
+          type: integer
+        commentCount:
+          type: integer
+        hasProduct:
+          type: boolean
+        productPrice:
+          type: number
+        createTime:
+          type: string
+          format: date-time
+
+    NoteDetailResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        data:
+          $ref: "#/components/schemas/NoteDetail"
+
+    NoteDetail:
+      type: object
+      properties:
+        noteId:
+          type: integer
+        title:
+          type: string
+        content:
+          type: string
+        images:
+          type: array
+          items:
+            type: string
+            format: url
+        tags:
+          type: array
+          items:
+            type: string
+        author:
+          $ref: "#/components/schemas/FollowerUser"
+        likeCount:
+          type: integer
+        collectCount:
+          type: integer
+        commentCount:
+          type: integer
+        isLiked:
+          type: boolean
+        isCollected:
+          type: boolean
+        createTime:
+          type: string
+          format: date-time
+
+    LikeResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            likeCount:
+              type: integer
+            isLiked:
+              type: boolean
+
+    CollectResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            collectCount:
+              type: integer
+            isCollected:
+              type: boolean
+
+    CommentListResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        data:
+          type: object
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            pageSize:
+              type: integer
+            list:
+              type: array
+              items:
+                $ref: "#/components/schemas/CommentItem"
+
+    CommentItem:
+      type: object
+      properties:
+        commentId:
+          type: integer
+        userId:
+          type: integer
+        nickname:
+          type: string
+        content:
+          type: string
+        likeCount:
+          type: integer
+        createTime:
+          type: string
+          format: date-time
+
+    CommentResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            commentId:
+              type: integer
+            content:
+              type: string
+
+    SearchResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        data:
+          type: object
+          properties:
+            keyword:
+              type: string
+            total:
+              type: integer
+            list:
+              type: array
+              items:
+                $ref: "#/components/schemas/SearchResult"
+
+    SearchResult:
+      type: object
+      properties:
+        noteId:
+          type: integer
+        title:
+          type: string
+        author:
+          $ref: "#/components/schemas/FollowerUser"
+        likeCount:
+          type: integer
+
+    PrivacyResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+        data:
+          type: object
+          properties:
+            contentVisibility:
+              type: string
+            allowStrangerMessage:
+              type: boolean
+            showFollowerList:
+              type: boolean
