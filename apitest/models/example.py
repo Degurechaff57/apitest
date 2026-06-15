@@ -44,8 +44,8 @@ class TestExample:
 
     @classmethod
     def from_dict(cls, data: dict) -> "TestExample":
-        req = data.get("request", {})
-        exp = data.get("expected", {})
+        req = data.get("request") or {}
+        exp = data.get("expected") or {}
         return cls(
             id=data["id"],
             area=data.get("area", "functional"),
