@@ -169,7 +169,13 @@ def run(
     mock_server = None
     if exec_mode == "mock":
         import yaml
-        with open(config.api_doc) as f:
+        mock_spec_path = _resolve_mock_spec(config.api_doc, config)
+        if mock_spec_path is None:
+            print("Error: Mock mode requires an OpenAPI spec file.")
+            print(f"  No OpenAPI spec found for: {config.api_doc}")
+            print(f"  Provide an OpenAPI YAML/JSON spec, or use --mode real.")
+            raise typer.Exit(code=1)
+        with open(mock_spec_path) as f:
             spec = yaml.safe_load(f)
         mock_app = create_mock_app(spec)
         mock_server = MockServer(mock_app, port=config.execution_mock_server_port)
@@ -254,8 +260,14 @@ def go(
     mock_server = None
     if exec_mode == "mock":
         import yaml
-        # Use the CLI arg if it's OpenAPI, otherwise fall back to config
-        mock_spec_path = api_doc if detect_format(api_doc) == "openapi" else config.api_doc
+        mock_spec_path = _resolve_mock_spec(api_doc, config)
+        if mock_spec_path is None:
+            print("Error: Mock mode requires an OpenAPI spec file.")
+            print(f"  The doc '{api_doc}' is a markdown file.")
+            print(f"  Provide an OpenAPI YAML/JSON spec, or use --mode real.")
+            print(f"  Tip: place an OpenAPI spec alongside your markdown doc,")
+            print(f"       e.g. demo/specs/<name>-openapi.yaml")
+            raise typer.Exit(code=1)
         with open(mock_spec_path) as f:
             spec = yaml.safe_load(f)
         mock_app = create_mock_app(spec)
@@ -293,6 +305,40 @@ def _correct_examples_against_endpoints(examples, endpoints):
     """Fix request bodies, status codes, and headers based on parsed API spec."""
     corrector = SchemaCorrector()
     return corrector.correct(examples, endpoints)
+
+
+def _resolve_mock_spec(api_doc: str, config) -> str | None:
+    """Find the best OpenAPI spec for mock mode. Returns path or None."""
+    # If the doc is already OpenAPI, use it
+    if detect_format(api_doc) == "openapi":
+        return api_doc
+
+    # For markdown docs, look for a matching OpenAPI spec
+    from pathlib import Path
+    doc_path = Path(api_doc)
+    doc_stem = doc_path.stem  # e.g., "xiaohongshu-api"
+
+    # 1. Check specs/ subdirectory next to the doc
+    specs_dir = doc_path.parent / "specs"
+    if specs_dir.is_dir():
+        for candidate in specs_dir.glob("*.yaml"):
+            if "openapi" in candidate.stem.lower():
+                return str(candidate)
+        for candidate in specs_dir.glob("*.yml"):
+            if "openapi" in candidate.stem.lower():
+                return str(candidate)
+
+    # 2. Check same directory with .yaml extension
+    yaml_path = doc_path.with_suffix(".yaml")
+    if yaml_path.exists():
+        return str(yaml_path)
+
+    # 3. Fall back to config.api_doc if it exists and is OpenAPI
+    config_doc = config.api_doc
+    if Path(config_doc).exists() and detect_format(config_doc) == "openapi":
+        return config_doc
+
+    return None
 
 
 if __name__ == "__main__":

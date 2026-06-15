@@ -1,7 +1,6 @@
 import json
 import subprocess
 import sys
-import webbrowser
 from pathlib import Path
 
 
@@ -39,8 +38,8 @@ class Reporter:
         if self.auto_serve:
             report_index = Path(self.report_dir) / "index.html"
             if report_index.exists():
-                webbrowser.open(f"file://{report_index.absolute()}")
-                print(f"Allure report opened: {report_index}")
+                # Serve via HTTP — browsers block fetch() on file:// URLs
+                subprocess.run(["allure", "open", self.report_dir], check=False)
             else:
                 print("Report generation failed. Check allure-results for raw data.")
 
