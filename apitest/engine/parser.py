@@ -57,6 +57,30 @@ def _parse_operation(method: str, path: str, operation: dict, spec: dict) -> End
             required=rb.get("required", False),
         )
 
+    # Extract body schema properties as body-location Parameters
+    if request_body and request_body.schema_ref == "":  # inline schema, not $ref
+        rb = operation.get("requestBody", {})
+        content = rb.get("content", {})
+        json_content = content.get("application/json", {})
+        body_schema = json_content.get("schema", {})
+        body_props = body_schema.get("properties", {})
+        body_required = body_schema.get("required", [])
+        for prop_name, prop_schema in body_props.items():
+            parameters.append(Parameter(
+                name=prop_name,
+                location="body",
+                schema_type=prop_schema.get("type", "string"),
+                required=prop_name in body_required,
+                description=prop_schema.get("description", ""),
+                enum=prop_schema.get("enum"),
+                minimum=prop_schema.get("minimum"),
+                maximum=prop_schema.get("maximum"),
+                min_length=prop_schema.get("minLength"),
+                max_length=prop_schema.get("maxLength"),
+                format=prop_schema.get("format", ""),
+                default=prop_schema.get("default"),
+            ))
+
     responses = []
     for status_str, resp in operation.get("responses", {}).items():
         try:

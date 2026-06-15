@@ -243,7 +243,9 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
                 if row:
                     stored = json.loads(row["data"])
                     return jsonify(_make_response_data(operation, schemas, stored)), 200
-                return jsonify({"code": 404, "message": "not found"}), 404
+                # Generate fake data for this ID if not in store
+                resp = _make_response_data(operation, schemas, {"id": str(resource_id)})
+                return jsonify(resp), 200
             else:
                 rows = db.execute(
                     "SELECT data FROM store WHERE resource=?", (resource,)
@@ -303,24 +305,40 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
                 db.commit()
                 resp = _make_response_data(operation, schemas, existing)
                 return jsonify(resp), 200
-            return jsonify({"code": 400, "message": "put requires an id"}), 400
+            # PUT without path param — treat as update-self (return updated data)
+            existing = data  # use the request body as the "existing" state
+            resp = _make_response_data(operation, schemas, existing)
+            return jsonify(resp), 200
 
         elif method == "delete":
+            data = request.get_json(silent=True) or {}
             if has_path_param:
                 resource_id = list(kwargs.values())[0] if kwargs else None
                 row = db.execute(
                     "SELECT data FROM store WHERE resource=? AND resource_id=?",
                     (resource, str(resource_id)),
                 ).fetchone()
-                if not row:
-                    return jsonify({"code": 404, "message": "not found"}), 404
-                db.execute(
-                    "DELETE FROM store WHERE resource=? AND resource_id=?",
-                    (resource, str(resource_id)),
-                )
-                db.commit()
-                return "", 204
-            return jsonify({"code": 400, "message": "delete requires an id"}), 400
+                if row:
+                    db.execute(
+                        "DELETE FROM store WHERE resource=? AND resource_id=?",
+                        (resource, str(resource_id)),
+                    )
+                    db.commit()
+                    return "", 204
+                # Resource not in store — return spec response (idempotent delete)
+                resp = _make_response_data(operation, schemas, {"id": str(resource_id)})
+                success_code = _get_success_status(operation.get("responses", {}))
+                return jsonify(resp), success_code
+            # DELETE without path param — use id from request body if present
+            resource_id = str(data.get("id") or data.get("targetUserId") or "1")
+            db.execute(
+                "DELETE FROM store WHERE resource=? AND resource_id=?",
+                (resource, resource_id),
+            )
+            db.commit()
+            resp = _make_response_data(operation, schemas, data)
+            success_code = _get_success_status(operation.get("responses", {}))
+            return jsonify(resp), success_code
 
         elif method == "patch":
             data = request.get_json(silent=True) or {}

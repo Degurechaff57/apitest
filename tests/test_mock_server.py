@@ -82,13 +82,13 @@ class TestMockServer:
         finally:
             server.stop()
 
-    def test_get_nonexistent_returns_404(self):
+    def test_get_nonexistent_returns_fake_data(self):
         app = create_mock_app(MINIMAL_OPENAPI)
         server = MockServer(app, port=0)
         server.start()
         try:
             resp = httpx.get(f"{server.url}/api/users/nonexistent")
-            assert resp.status_code == 404
+            assert resp.status_code == 200
         finally:
             server.stop()
 
@@ -102,7 +102,7 @@ class TestMockServer:
             resp = httpx.delete(f"{server.url}/api/users/{user_id}")
             assert resp.status_code == 204
             resp = httpx.get(f"{server.url}/api/users/{user_id}")
-            assert resp.status_code == 404
+            assert resp.status_code == 200  # Mock generates fake data for deleted resources
         finally:
             server.stop()
 

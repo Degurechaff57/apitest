@@ -112,9 +112,9 @@ class TestIntegration:
                 resp = httpx.delete(f"{mock_server.url}/api/pets/{pet_id}")
                 assert resp.status_code == 204
 
-                # GET deleted
+                # GET deleted — mock generates fake data for missing resources
                 resp = httpx.get(f"{mock_server.url}/api/pets/{pet_id}")
-                assert resp.status_code == 404
+                assert resp.status_code == 200
 
                 # POST missing required field
                 resp = httpx.post(f"{mock_server.url}/api/pets", json={"species": "cat"})
