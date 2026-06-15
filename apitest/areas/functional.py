@@ -8,6 +8,38 @@ from apitest.models.example import TestExample, CATEGORIES, COVERAGE_LEVELS
 FUNCTIONAL_SYSTEM_PROMPT = """You are a senior API QA engineer specializing in functional testing.
 Generate test examples and pytest code from API endpoint specifications.
 
+## Example Output (follow this EXACT format and style)
+
+Here is a correct example for a login endpoint:
+
+```json
+{
+  "id": "TC-LOGIN-001",
+  "area": "functional",
+  "category": "happy-path",
+  "endpoint": "POST /api/auth/login",
+  "description": "Login with valid phone and code returns token",
+  "preconditions": [],
+  "request": {
+    "headers": {"Content-Type": "application/json"},
+    "body": {"phone": "13800138000", "code": "123456"}
+  },
+  "expected": {
+    "status": 200,
+    "body_contains": ["data"],
+    "max_response_time_ms": 2000
+  },
+  "depends_on": null,
+  "cleanup": ""
+}
+```
+
+KEY RULES demonstrated by this example:
+1. request.body uses the EXACT field names from the endpoint Parameters section
+2. expected.status matches the FIRST success response code from the spec
+3. body_contains lists top-level response fields (most APIs wrap in 'data')
+4. Use ${TOKEN} for dynamic auth values, real data for everything else
+
 ## Test Categories
 1. **happy-path**: One success case per endpoint using valid inputs
 2. **equivalence-class**: Partition inputs into valid/invalid classes, test one per class
@@ -95,6 +127,8 @@ class FunctionalArea(TestArea):
 
         user_prompt = f"""Generate test examples for the following API endpoints at coverage level: {coverage}.
 Include these categories: {', '.join(categories)}.
+CRITICAL: For request bodies, use the EXACT field names listed in each endpoint's "Parameters" section. Do NOT guess or substitute field names. If the spec says "phone" and "code", use "phone" and "code" — NOT "username" and "password".
+CRITICAL: For expected status codes, use the FIRST success response listed in the spec. If the spec shows "200", use 200. If it shows "201", use 201. Do NOT guess.
 
 ## Endpoints
 {context}
@@ -178,11 +212,37 @@ Import allure: from allure import feature, story, step
         return self._extract_code(response)
 
     def _parse_examples(self, response: str) -> list[TestExample]:
-        match = re.search(r'\{[\s\S]*"examples"[\s\S]*\}', response)
-        if match:
-            data = json.loads(match.group())
+        # Try to extract JSON block containing "examples"
+        # Find the start of the JSON object
+        start = response.find('{"examples"')
+        if start == -1:
+            start = response.find('{ "examples"')
+        if start >= 0:
+            # Extract balanced braces from start
+            depth = 0
+            end = start
+            for i in range(start, len(response)):
+                if response[i] == '{':
+                    depth += 1
+                elif response[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            json_str = response[start:end]
         else:
-            data = json.loads(response)
+            json_str = response
+
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            # Try stripping markdown code fences
+            cleaned = re.sub(r'```\w*\n?', '', json_str)
+            cleaned = cleaned.strip()
+            try:
+                data = json.loads(cleaned)
+            except json.JSONDecodeError:
+                return []
         return [TestExample.from_dict(e) for e in data.get("examples", [])]
 
     def _extract_code(self, response: str) -> str:
