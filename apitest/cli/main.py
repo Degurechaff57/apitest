@@ -13,6 +13,7 @@ from apitest.engine.runner import TestRunner
 from apitest.engine.reporter import Reporter
 from apitest.engine.mock_server import create_mock_app, MockServer
 from apitest.cli.init_wizard import InitWizard
+from apitest.engine.schema_corrector import SchemaCorrector
 
 app = typer.Typer(
     name="apitest",
@@ -69,6 +70,7 @@ def examples(
     )
     gen = Generator(client)
 
+    endpoints = None
     if doc_format == "markdown":
         print(f"Reading API doc from {api_doc}...")
         doc_text = parse_text(api_doc)
@@ -80,6 +82,11 @@ def examples(
         print(f"Found {len(endpoints)} endpoints")
         print(f"Generating examples (coverage: {cov})...")
         test_examples = gen.generate_examples(endpoints, cov, config.areas)
+
+    # Schema correction: fix expected status codes and body assertions from spec
+    if endpoints:
+        test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
+        print(f"Corrected examples against API spec")
 
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -219,6 +226,11 @@ def go(
         print(f"Parsed {len(endpoints)} endpoints from {api_doc}")
         test_examples = gen.generate_examples(endpoints, cov, config.areas)
 
+    # Schema correction for OpenAPI docs
+    if doc_format != "markdown":
+        test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
+        print(f"Corrected examples against API spec")
+
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     examples_path = output_dir / f"examples.{config.examples_format}"
@@ -275,6 +287,12 @@ def report(
     config = load_config(config_path)
     reporter = Reporter(auto_serve=True, results_dir=config.report_dir)
     reporter.serve()
+
+
+def _correct_examples_against_endpoints(examples, endpoints):
+    """Fix request bodies, status codes, and headers based on parsed API spec."""
+    corrector = SchemaCorrector()
+    return corrector.correct(examples, endpoints)
 
 
 if __name__ == "__main__":
