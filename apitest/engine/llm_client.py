@@ -18,7 +18,7 @@ class LLMClient(ABC):
         if provider == "openai":
             return OpenAIClient(model, api_key)
         elif provider == "anthropic":
-            return AnthropicClient(model, api_key)
+            return AnthropicClient(model, api_key, base_url)
         elif provider == "custom":
             return CustomClient(model, api_key, base_url)
         else:
@@ -43,15 +43,31 @@ class OpenAIClient(LLMClient):
 class AnthropicClient(LLMClient):
     def chat(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
         from anthropic import Anthropic
-        client = Anthropic(api_key=self.api_key)
+
+        client_kwargs = {}
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
+        if self.api_key:
+            # sk-* tokens use bearer auth, others use x-api-key
+            if self.api_key.startswith("sk-"):
+                client_kwargs["auth_token"] = self.api_key
+            else:
+                client_kwargs["api_key"] = self.api_key
+
+        client = Anthropic(**client_kwargs)
         response = client.messages.create(
-            model=self.model,
             max_tokens=8192,
+            model=self.model,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
             temperature=temperature,
         )
-        return response.content[0].text
+        # Collect text from TextBlock content (skip ThinkingBlock from DeepSeek)
+        text_parts = []
+        for block in response.content:
+            if hasattr(block, "text"):
+                text_parts.append(block.text)
+        return "".join(text_parts)
 
 
 class CustomClient(LLMClient):

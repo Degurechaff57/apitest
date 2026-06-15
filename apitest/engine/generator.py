@@ -31,6 +31,19 @@ class Generator:
             all_examples.extend(examples)
         return all_examples
 
+    def generate_examples_from_text(self, doc_text: str, coverage: str, area_names: list[str]):
+        """Generate examples directly from raw API doc text (markdown, txt, etc.)."""
+        areas = registry.get_enabled(area_names)
+        all_examples = []
+        for area in areas:
+            if hasattr(area, "generate_examples_from_text"):
+                examples = area.generate_examples_from_text(doc_text, coverage, self.llm)
+            else:
+                # Fallback: have LLM extract endpoints from text first, then generate
+                examples = area.generate_examples([], coverage, self.llm)
+            all_examples.extend(examples)
+        return all_examples
+
     def generate_plan(self, examples, coverage, area_names):
         examples_json = json.dumps([e.to_dict() for e in examples], indent=2)
 

@@ -121,26 +121,57 @@ Each example object:
         response = llm.chat(FUNCTIONAL_SYSTEM_PROMPT, user_prompt)
         return self._parse_examples(response)
 
+    def generate_examples_from_text(self, doc_text: str, coverage: str, llm) -> list:
+        """Generate test examples directly from raw API doc text (markdown, txt, etc.)."""
+        categories = COVERAGE_LEVELS.get(coverage, COVERAGE_LEVELS["happy-path"])
+
+        user_prompt = f"""Analyze this API documentation and generate test examples at coverage level: {coverage}.
+Include these categories: {', '.join(categories)}.
+
+## API Documentation
+{doc_text}
+
+## Output Format
+Return valid JSON with this structure:
+{{"examples": [{{example objects}}]}}
+
+Each example object:
+{{
+  "id": "TC-<RESOURCE>-<NNN>",
+  "area": "functional",
+  "category": "one of: {', '.join(categories)}",
+  "endpoint": "METHOD /path",
+  "description": "what this tests",
+  "preconditions": ["list of prerequisites"],
+  "request": {{"headers": {{}}, "body": {{}}}},
+  "expected": {{"status": 200, "body_contains": ["field"], "schema": "SchemaName", "max_response_time_ms": 2000}},
+  "depends_on": null,
+  "cleanup": ""
+}}
+"""
+
+        response = llm.chat(FUNCTIONAL_SYSTEM_PROMPT, user_prompt)
+        return self._parse_examples(response)
+
     def generate_test_code(self, examples, llm) -> str:
         examples_json = json.dumps([e.to_dict() for e in examples], indent=2)
 
         user_prompt = f"""Generate pytest code for the following test examples.
 Use the apitest fixtures: client (httpx.Client), auth_token (str).
 
-Import and use allure: from allure import feature, story, step
+Import allure: from allure import feature, story, step
 
 ## Test Examples
 {examples_json}
 
-## Code Rules
-- Class name: Test<ResourceName> (PascalCase)
-- Method name: test_<description_snake_case>
-- Decorate with @feature("<Resource>") and @story("<Operation>")
-- Use client.<method>(endpoint, ...) for requests
-- Assert status code, response body fields, and response time
-- Handle depends_on with pytest-order or manual ordering
-- ${{VAR}} values come from fixtures or environment
-- Return ONLY valid Python code, no markdown wrapping
+## CRITICAL — Python Syntax Rules
+- Use Python True/False/None, NEVER true/false/null (those are JSON)
+- Replace template path params like {{noteId}} with real values like "1" or "test-id"
+- Status codes: match exact values from the examples — 201 means 201, 400 means 400
+- Assert response body fields as listed in expected.body_contains
+- Use f-strings with auth_token: f"Bearer {{auth_token}}"
+- Run independent tests first, then dependent ones
+- Return ONLY valid Python code, no markdown wrapping, no ```python fences
 """
 
         response = llm.chat(FUNCTIONAL_SYSTEM_PROMPT, user_prompt)

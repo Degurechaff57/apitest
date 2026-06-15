@@ -34,3 +34,10 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["apitest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::_pytest.warning_types.PytestCollectionWarning",
+]
+norecursedirs = ["tests/examples"]

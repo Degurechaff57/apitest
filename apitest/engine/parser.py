@@ -5,11 +5,19 @@ from apitest.models.endpoint import Endpoint, Parameter, RequestBody, Response
 
 
 def detect_format(filepath: str) -> str:
-    """Detect API doc format from filename. Returns 'openapi' or 'postman'."""
+    """Detect API doc format from filename or content. Returns 'openapi', 'postman', or 'markdown'."""
     name = Path(filepath).name.lower()
+    ext = Path(filepath).suffix.lower()
     if "postman" in name or "collection" in name:
         return "postman"
+    if ext in (".md", ".txt", ".markdown"):
+        return "markdown"
     return "openapi"
+
+
+def parse_text(filepath: str) -> str:
+    """Read a markdown or text API document as raw content for LLM processing."""
+    return Path(filepath).read_text()
 
 
 def parse_openapi(filepath: str) -> list[Endpoint]:

@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,7 @@ class TestRunner:
 
     def __init__(self, config):
         self.config = config
-        self._test_dir = Path("tests")
+        self._test_dir = Path("apitest_tests")
 
     def run(self, examples, plan, mode, mock_server=None):
         self._test_dir.mkdir(exist_ok=True)
@@ -64,15 +65,15 @@ def generate_pytest_file(resource: str, examples, base_url: str) -> str:
         feature = resource.title()
         story = example.description
 
-        lines.append(f"    @allure.feature('{feature}')")
-        lines.append(f"    @allure.story('{story}')")
+        lines.append(f"    @allure.feature('{_escape_py_str(feature)}')")
+        lines.append(f"    @allure.story('{_escape_py_str(story)}')")
         lines.append(f"    def {test_name}(self, client, auth_token):")
 
         headers = {}
         for k, v in example.request_headers.items():
-            headers[k] = v.replace("${TOKEN}", "{auth_token}").replace(
-                "${ADMIN_TOKEN}", "{auth_token}"
-            )
+            # Replace all ${VAR} patterns with auth_token reference
+            val = re.sub(r'\$\{\w+\}', '{auth_token}', v)
+            headers[k] = val
 
         headers_str = ", ".join(
             f'"{k}": f"{v}"' for k, v in headers.items()
@@ -99,7 +100,7 @@ def generate_pytest_file(resource: str, examples, base_url: str) -> str:
             f"        assert res.status_code == {example.expected_status}"
         )
         for field in example.expected_body_contains:
-            lines.append(f"        assert '{field}' in res.json()")
+            lines.append(f"        assert '{_escape_py_str(field)}' in res.json()")
         lines.append(
             f"        assert res.elapsed.total_seconds() < {example.max_response_time_ms / 1000}"
         )
@@ -116,6 +117,11 @@ def _group_by_resource(examples):
         resource = parts[-1] if parts else "root"
         groups.setdefault(resource, []).append(e)
     return groups
+
+
+def _escape_py_str(s: str) -> str:
+    """Escape a string for safe use in Python single-quoted string literals."""
+    return s.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _to_test_name(example):

@@ -48,6 +48,12 @@ def _resolve_env_vars(value: str) -> str:
     return _ENV_VAR_RE.sub(_replace, value)
 
 
+_DEFAULT_ENV_VARS = {
+    "anthropic": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+    "openai": ["OPENAI_API_KEY"],
+}
+
+
 def load_config(path: str | None = None) -> Config:
     if path is None:
         cwd_path = Path.cwd() / ".apitest.yaml"
@@ -69,11 +75,29 @@ def load_config(path: str | None = None) -> Config:
     api_key = llm.get("api_key", "")
     api_key = _resolve_env_vars(api_key) if api_key else ""
 
+    provider = llm.get("provider", "anthropic")
+
+    # Fallback: check provider-specific env vars if no key from config
+    if not api_key:
+        for env_var in _DEFAULT_ENV_VARS.get(provider, []):
+            api_key = os.environ.get(env_var, "")
+            if api_key:
+                break
+
+    # Fallback: check provider-specific base URL from env
+    base_url = llm.get("base_url")
+    if not base_url and provider == "anthropic":
+        base_url = os.environ.get("ANTHROPIC_BASE_URL")
+
+    model = llm.get("model", "")
+    if not model and provider == "anthropic":
+        model = os.environ.get("ANTHROPIC_MODEL", "")
+
     return Config(
-        llm_provider=llm.get("provider", "anthropic"),
-        llm_model=llm.get("model", "claude-sonnet-4-6"),
+        llm_provider=provider,
+        llm_model=model or "claude-sonnet-4-6",
         llm_api_key=api_key,
-        llm_base_url=llm.get("base_url"),
+        llm_base_url=base_url,
         api_doc=raw.get("api_doc", "specs/openapi.yaml"),
         examples_format=examples.get("format", "json"),
         examples_dir=examples.get("dir", "tests/examples"),

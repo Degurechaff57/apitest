@@ -5,7 +5,7 @@ import typer
 
 from apitest import __version__
 from apitest.config import load_config
-from apitest.engine.parser import parse_openapi
+from apitest.engine.parser import parse_openapi, detect_format, parse_text
 from apitest.engine.llm_client import LLMClient
 from apitest.engine.generator import Generator
 from apitest.engine.formatter import write_examples, read_examples, write_plan, read_plan
@@ -63,16 +63,23 @@ def examples(
     fmt = output_format or config.examples_format
     cov = coverage or config.coverage
 
-    print(f"Parsing {api_doc}...")
-    endpoints = parse_openapi(api_doc)
-    print(f"Found {len(endpoints)} endpoints")
-
-    print(f"Generating examples (coverage: {cov})...")
+    doc_format = detect_format(api_doc)
     client = LLMClient.create(
         config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
     )
     gen = Generator(client)
-    test_examples = gen.generate_examples(endpoints, cov, config.areas)
+
+    if doc_format == "markdown":
+        print(f"Reading API doc from {api_doc}...")
+        doc_text = parse_text(api_doc)
+        print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
+        test_examples = gen.generate_examples_from_text(doc_text, cov, config.areas)
+    else:
+        print(f"Parsing {api_doc}...")
+        endpoints = parse_openapi(api_doc)
+        print(f"Found {len(endpoints)} endpoints")
+        print(f"Generating examples (coverage: {cov})...")
+        test_examples = gen.generate_examples(endpoints, cov, config.areas)
 
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -191,18 +198,27 @@ def go(
     config = load_config(config_path)
     cov = coverage or config.coverage
     exec_mode = mode or config.execution_mode
+    doc_format = detect_format(api_doc)
+
+    client = LLMClient.create(
+        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+    )
+    gen = Generator(client)
 
     # Step 1: Examples
     print(f"\n{'='*50}")
     print(f"Step 1/3: Generating test examples")
     print(f"{'='*50}\n")
-    endpoints = parse_openapi(api_doc)
-    print(f"Parsed {len(endpoints)} endpoints from {api_doc}")
-    client = LLMClient.create(
-        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-    )
-    gen = Generator(client)
-    test_examples = gen.generate_examples(endpoints, cov, config.areas)
+
+    if doc_format == "markdown":
+        doc_text = parse_text(api_doc)
+        print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
+        test_examples = gen.generate_examples_from_text(doc_text, cov, config.areas)
+    else:
+        endpoints = parse_openapi(api_doc)
+        print(f"Parsed {len(endpoints)} endpoints from {api_doc}")
+        test_examples = gen.generate_examples(endpoints, cov, config.areas)
+
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     examples_path = output_dir / f"examples.{config.examples_format}"

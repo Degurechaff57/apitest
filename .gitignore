@@ -1,3 +1,12 @@
 .superpowers/
 __pycache__/
 *.pyc
+.apitest.yaml
+apitest_tests/
+allure-results/
+allure-report/
+tests/examples/
+test_plan.*
+.pytest_cache/
+*.egg-info/
+dist/

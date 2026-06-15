@@ -13,7 +13,8 @@ def base_url():
 def auth_token():
     token = os.environ.get("APITEST_AUTH_TOKEN", "")
     if not token:
-        pytest.skip("APITEST_AUTH_TOKEN not set")
+        # In mock mode or without auth config, use a placeholder token
+        token = "mock-token-for-testing"
     return token
 
 

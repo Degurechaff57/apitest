@@ -6,13 +6,24 @@ from apitest.config import Config, load_config
 
 class TestConfig:
     def test_loads_default_values_with_no_file(self):
-        cfg = load_config()
-        assert cfg.llm_provider == "anthropic"
-        assert cfg.llm_model == "claude-sonnet-4-6"
-        assert cfg.examples_format == "json"
-        assert cfg.plan_format == "md"
-        assert cfg.coverage == "happy-path"
-        assert cfg.execution_mode == "mock"
+        # Save and clear env vars that override defaults
+        saved = {}
+        for var in ("ANTHROPIC_MODEL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                     "ANTHROPIC_BASE_URL", "OPENAI_API_KEY"):
+            saved[var] = os.environ.pop(var, None)
+
+        try:
+            cfg = load_config()
+            assert cfg.llm_provider == "anthropic"
+            assert cfg.llm_model == "claude-sonnet-4-6"
+            assert cfg.examples_format == "json"
+            assert cfg.plan_format == "md"
+            assert cfg.coverage == "happy-path"
+            assert cfg.execution_mode == "mock"
+        finally:
+            for var, val in saved.items():
+                if val is not None:
+                    os.environ[var] = val
 
     def test_loads_from_yaml_file(self):
         yaml_content = """
