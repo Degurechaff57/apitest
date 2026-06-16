@@ -213,12 +213,10 @@ Import allure: from allure import feature, story, step
 
     def _parse_examples(self, response: str) -> list[TestExample]:
         # Try to extract JSON block containing "examples"
-        # Find the start of the JSON object
         start = response.find('{"examples"')
         if start == -1:
             start = response.find('{ "examples"')
         if start >= 0:
-            # Extract balanced braces from start
             depth = 0
             end = start
             for i in range(start, len(response)):
@@ -236,12 +234,13 @@ Import allure: from allure import feature, story, step
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            # Try stripping markdown code fences
             cleaned = re.sub(r'```\w*\n?', '', json_str)
             cleaned = cleaned.strip()
             try:
                 data = json.loads(cleaned)
             except json.JSONDecodeError:
+                print(f"Warning: LLM response could not be parsed as JSON.")
+                print(f"Response preview (first 500 chars): {response[:500]}")
                 return []
         return [TestExample.from_dict(e) for e in data.get("examples", [])]
 
