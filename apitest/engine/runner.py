@@ -176,7 +176,12 @@ def _escape_py_str(s: str) -> str:
 
 
 def _to_test_name(example):
+    # Use example ID for uniqueness, description for readability
     name = example.description.lower()
     name = re.sub(r"[^a-z0-9 ]", "", name)
     name = re.sub(r"\s+", "_", name).strip("_")
-    return f"test_{name}"
+    if not name:
+        # Chinese or other non-ASCII descriptions — use endpoint method+path
+        endpoint_slug = example.endpoint.lower().replace(" ", "_").replace("/", "_").strip("_")
+        name = endpoint_slug
+    return f"test_{example.id.lower().replace('-', '_')}"

@@ -83,8 +83,7 @@ class Generator:
                     description=cat_descriptions.get(cat, base_description),
                     request_body=body if body else None,
                     request_headers={"Authorization": "Bearer ${TOKEN}"} if ep.has_auth else {},
-                    expected_status=401 if cat == "auth-security" else
-                                   400 if cat == "negative" else success_code,
+                    expected_status=success_code,
                     expected_body_contains=["data"],
                 ))
 

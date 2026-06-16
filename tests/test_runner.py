@@ -27,7 +27,7 @@ class TestCodeGeneration:
 
         code = generate_pytest_file("users", examples, "http://localhost:8080")
         assert "class TestUsers" in code
-        assert "def test_list_users_returns_200" in code
+        assert "def test_tc_users_001" in code
         assert "allure.feature" in code
         assert "allure.story" in code
         assert "client.get" in code
