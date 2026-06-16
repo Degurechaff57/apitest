@@ -230,6 +230,8 @@ def go(
     else:
         endpoints = parse_openapi(api_doc)
         print(f"Parsed {len(endpoints)} endpoints from {api_doc}")
+        print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
+        print("  (this may take 10-60 seconds depending on the model)")
         test_examples = gen.generate_examples(endpoints, cov, config.areas)
 
     # Schema correction for OpenAPI docs
@@ -243,10 +245,18 @@ def go(
     write_examples(test_examples, str(examples_path), config.examples_format)
     print(f"Generated {len(test_examples)} examples -> {examples_path}")
 
+    if len(test_examples) == 0:
+        print("\nError: No test examples were generated. Check your LLM configuration:")
+        print(f"  Provider: {config.llm_provider}")
+        print(f"  Model: {config.llm_model}")
+        print(f"  API key set: {'yes' if config.llm_api_key else 'NO — check your .apitest.yaml or env vars'}")
+        raise typer.Exit(code=1)
+
     # Step 2: Plan
     print(f"\n{'='*50}")
     print(f"Step 2/3: Generating test plan")
     print(f"{'='*50}\n")
+    print(f"Calling {config.llm_model} to organize examples into a plan...")
     test_plan = gen.generate_plan(test_examples, cov, config.areas)
     plan_path = config.plan_path
     write_plan(test_plan, plan_path, config.plan_format)
