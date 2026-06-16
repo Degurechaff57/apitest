@@ -58,6 +58,7 @@ def examples(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
     coverage: Optional[str] = typer.Option(None, "--coverage", help="Coverage level"),
     output_format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format"),
+    fast: bool = typer.Option(False, "--fast", help="Schema-only generation (no LLM, instant)"),
 ):
     """Generate test examples from an API document."""
     config = load_config(config_path)
@@ -79,8 +80,19 @@ def examples(
         print(f"Parsing {api_doc}...")
         endpoints = parse_openapi(api_doc)
         print(f"Found {len(endpoints)} endpoints")
-        gen = Generator()  # no LLM for OpenAPI — instant schema generation
-        test_examples = gen.generate_examples_from_schema(endpoints, cov)
+
+        if fast:
+            gen = Generator()
+            test_examples = gen.generate_examples_from_schema(endpoints, cov)
+        else:
+            print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
+            client = LLMClient.create(
+                config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+            )
+            gen = Generator(client)
+            test_examples = gen.generate_examples(endpoints, cov, config.areas)
+            # Schema correction fixes hallucinated field names
+            test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
 
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -110,8 +122,11 @@ def plan(
     test_examples = read_examples(str(examples_file), config.examples_format)
 
     print(f"Generating plan for {len(test_examples)} examples...")
-    gen = Generator()  # no LLM — deterministic plan from examples
-    test_plan = gen.generate_plan_from_schema(test_examples, config.coverage, config.areas)
+    client = LLMClient.create(
+        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+    )
+    gen = Generator(client)
+    test_plan = gen.generate_plan(test_examples, config.coverage, config.areas)
 
     plan_path = config.plan_path
     if not plan_path.endswith(f".{fmt}"):
@@ -197,6 +212,7 @@ def go(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
     coverage: Optional[str] = typer.Option(None, "--coverage", help="Coverage level"),
     mode: Optional[str] = typer.Option(None, "--mode", help="Execution mode: mock | real"),
+    fast: bool = typer.Option(False, "--fast", help="Schema-only generation (no LLM, instant)"),
 ):
     """Run the full pipeline: examples -> plan -> run -> report."""
     config = load_config(config_path)
@@ -204,26 +220,34 @@ def go(
     exec_mode = mode or config.execution_mode
     doc_format = detect_format(api_doc)
 
-    client = LLMClient.create(
-        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-    )
-    gen = Generator(client)
-
     # Step 1: Examples
     print(f"\n{'='*50}")
     print(f"Step 1/3: Generating test examples")
     print(f"{'='*50}\n")
 
     if doc_format == "markdown":
+        client = LLMClient.create(
+            config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+        )
+        gen = Generator(client)
         doc_text = parse_text(api_doc)
         print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
         test_examples = gen.generate_examples_from_text(doc_text, cov, config.areas)
     else:
         endpoints = parse_openapi(api_doc)
         print(f"Parsed {len(endpoints)} endpoints from {api_doc}")
-        # Schema-based generation — instant, no LLM needed
-        test_examples = gen.generate_examples_from_schema(endpoints, cov)
-        print(f"Generated {len(test_examples)} examples from schema")
+
+        if fast:
+            gen = Generator()
+            test_examples = gen.generate_examples_from_schema(endpoints, cov)
+        else:
+            print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
+            client = LLMClient.create(
+                config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+            )
+            gen = Generator(client)
+            test_examples = gen.generate_examples(endpoints, cov, config.areas)
+            test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
 
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -241,8 +265,12 @@ def go(
     print(f"\n{'='*50}")
     print(f"Step 2/3: Generating test plan")
     print(f"{'='*50}\n")
-    # Schema-based plan — instant, no LLM needed
-    test_plan = gen.generate_plan_from_schema(test_examples, cov, config.areas)
+    if fast:
+        test_plan = gen.generate_plan_from_schema(test_examples, cov, config.areas)
+    else:
+        plan_gen = Generator(client if doc_format != "markdown" else
+            LLMClient.create(config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url))
+        test_plan = plan_gen.generate_plan(test_examples, cov, config.areas)
     plan_path = config.plan_path
     write_plan(test_plan, plan_path, config.plan_format)
     print(f"Plan written -> {plan_path}")
