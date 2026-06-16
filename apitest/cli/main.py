@@ -65,13 +65,12 @@ def examples(
     cov = coverage or config.coverage
 
     doc_format = detect_format(api_doc)
-    client = LLMClient.create(
-        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-    )
-    gen = Generator(client)
 
-    endpoints = None
     if doc_format == "markdown":
+        client = LLMClient.create(
+            config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+        )
+        gen = Generator(client)
         print(f"Reading API doc from {api_doc}...")
         doc_text = parse_text(api_doc)
         print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
@@ -80,13 +79,8 @@ def examples(
         print(f"Parsing {api_doc}...")
         endpoints = parse_openapi(api_doc)
         print(f"Found {len(endpoints)} endpoints")
-        print(f"Generating examples (coverage: {cov})...")
-        test_examples = gen.generate_examples(endpoints, cov, config.areas)
-
-    # Schema correction: fix expected status codes and body assertions from spec
-    if endpoints:
-        test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
-        print(f"Corrected examples against API spec")
+        gen = Generator()  # no LLM for OpenAPI — instant schema generation
+        test_examples = gen.generate_examples_from_schema(endpoints, cov)
 
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -116,11 +110,8 @@ def plan(
     test_examples = read_examples(str(examples_file), config.examples_format)
 
     print(f"Generating plan for {len(test_examples)} examples...")
-    client = LLMClient.create(
-        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-    )
-    gen = Generator(client)
-    test_plan = gen.generate_plan(test_examples, config.coverage, config.areas)
+    gen = Generator()  # no LLM — deterministic plan from examples
+    test_plan = gen.generate_plan_from_schema(test_examples, config.coverage, config.areas)
 
     plan_path = config.plan_path
     if not plan_path.endswith(f".{fmt}"):
@@ -230,20 +221,14 @@ def go(
     else:
         endpoints = parse_openapi(api_doc)
         print(f"Parsed {len(endpoints)} endpoints from {api_doc}")
-        print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
-        print("  (this may take 10-60 seconds depending on the model)")
-        test_examples = gen.generate_examples(endpoints, cov, config.areas)
-
-    # Schema correction for OpenAPI docs
-    if doc_format != "markdown":
-        test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
-        print(f"Corrected examples against API spec")
+        # Schema-based generation — instant, no LLM needed
+        test_examples = gen.generate_examples_from_schema(endpoints, cov)
+        print(f"Generated {len(test_examples)} examples from schema")
 
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     examples_path = output_dir / f"examples.{config.examples_format}"
     write_examples(test_examples, str(examples_path), config.examples_format)
-    print(f"Generated {len(test_examples)} examples -> {examples_path}")
 
     if len(test_examples) == 0:
         print("\nError: No test examples were generated. Check your LLM configuration:")
@@ -256,8 +241,8 @@ def go(
     print(f"\n{'='*50}")
     print(f"Step 2/3: Generating test plan")
     print(f"{'='*50}\n")
-    print(f"Calling {config.llm_model} to organize examples into a plan...")
-    test_plan = gen.generate_plan(test_examples, cov, config.areas)
+    # Schema-based plan — instant, no LLM needed
+    test_plan = gen.generate_plan_from_schema(test_examples, cov, config.areas)
     plan_path = config.plan_path
     write_plan(test_plan, plan_path, config.plan_format)
     print(f"Plan written -> {plan_path}")
