@@ -17,6 +17,10 @@ class TestRunner:
     def run(self, examples, plan, mode, mock_server=None):
         self._test_dir.mkdir(exist_ok=True)
 
+        # Clean stale test files from previous runs
+        for old in self._test_dir.glob("test_*.py"):
+            old.unlink()
+
         base_url = self.config.base_url
         if mode == "mock" and mock_server:
             base_url = mock_server.url
