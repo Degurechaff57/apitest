@@ -212,36 +212,44 @@ Import allure: from allure import feature, story, step
         return self._extract_code(response)
 
     def _parse_examples(self, response: str) -> list[TestExample]:
-        # Try to extract JSON block containing "examples"
-        start = response.find('{"examples"')
+        # Strip code fences and text preamble — some LLMs wrap JSON in ``` fences
+        # and/or include explanatory text before the JSON
+        cleaned = re.sub(r'```\w*\n?', '', response)
+        cleaned = cleaned.strip()
+
+        # Find the outermost JSON object containing "examples"
+        start = cleaned.find('{"examples"')
         if start == -1:
-            start = response.find('{ "examples"')
+            start = cleaned.find('{\n  "examples"')
+        if start == -1:
+            start = cleaned.find('{\n    "examples"')
+        if start == -1:
+            # Last resort: find "examples" and backtrack to nearest {
+            ex_pos = cleaned.find('"examples"')
+            if ex_pos >= 0:
+                start = cleaned.rfind('{', 0, ex_pos)
+
         if start >= 0:
             depth = 0
             end = start
-            for i in range(start, len(response)):
-                if response[i] == '{':
+            for i in range(start, len(cleaned)):
+                if cleaned[i] == '{':
                     depth += 1
-                elif response[i] == '}':
+                elif cleaned[i] == '}':
                     depth -= 1
                     if depth == 0:
                         end = i + 1
                         break
-            json_str = response[start:end]
+            json_str = cleaned[start:end]
         else:
-            json_str = response
+            json_str = cleaned
 
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            cleaned = re.sub(r'```\w*\n?', '', json_str)
-            cleaned = cleaned.strip()
-            try:
-                data = json.loads(cleaned)
-            except json.JSONDecodeError:
-                print(f"Warning: LLM response could not be parsed as JSON.")
-                print(f"Response preview (first 500 chars): {response[:500]}")
-                return []
+            print(f"Warning: LLM response could not be parsed as JSON.")
+            print(f"Response preview (first 500 chars): {response[:500]}")
+            return []
         return [TestExample.from_dict(e) for e in data.get("examples", [])]
 
     def _extract_code(self, response: str) -> str:

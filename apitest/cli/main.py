@@ -14,6 +14,7 @@ from apitest.engine.reporter import Reporter
 from apitest.engine.mock_server import create_mock_app, MockServer
 from apitest.cli.init_wizard import InitWizard
 from apitest.engine.schema_corrector import SchemaCorrector
+from apitest.engine.cache import get_cached_examples, put_cached_examples, clear_cache
 
 app = typer.Typer(
     name="apitest",
@@ -49,7 +50,18 @@ def init():
             raise typer.Exit()
     config_path.write_text(yaml_content)
     print(f"\nConfig written to {config_path}")
-    print("You're ready! Try: apitest go <your-api-doc>")
+
+    test_now = typer.confirm("Test the LLM connection?")
+    if test_now:
+        _test_llm_connection(config_path)
+
+
+@app.command()
+def test(
+    config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
+):
+    """Test the LLM connection. Verifies API key and model access."""
+    _test_llm_connection(config_path)
 
 
 @app.command()
@@ -58,6 +70,8 @@ def examples(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
     coverage: Optional[str] = typer.Option(None, "--coverage", help="Coverage level"),
     output_format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format"),
+    fast: bool = typer.Option(False, "--fast", help="Schema-only generation (no LLM, instant)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, force LLM call"),
 ):
     """Generate test examples from an API document."""
     config = load_config(config_path)
@@ -65,13 +79,12 @@ def examples(
     cov = coverage or config.coverage
 
     doc_format = detect_format(api_doc)
-    client = LLMClient.create(
-        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-    )
-    gen = Generator(client)
 
-    endpoints = None
     if doc_format == "markdown":
+        client = LLMClient.create(
+            config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+        )
+        gen = Generator(client)
         print(f"Reading API doc from {api_doc}...")
         doc_text = parse_text(api_doc)
         print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
@@ -80,13 +93,33 @@ def examples(
         print(f"Parsing {api_doc}...")
         endpoints = parse_openapi(api_doc)
         print(f"Found {len(endpoints)} endpoints")
-        print(f"Generating examples (coverage: {cov})...")
-        test_examples = gen.generate_examples(endpoints, cov, config.areas)
 
-    # Schema correction: fix expected status codes and body assertions from spec
-    if endpoints:
-        test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
-        print(f"Corrected examples against API spec")
+        if fast:
+            gen = Generator()
+            test_examples = gen.generate_examples_from_schema(endpoints, cov)
+        else:
+            # Check cache
+            if not no_cache:
+                cached = get_cached_examples(api_doc, cov, config.areas)
+                if cached:
+                    print(f"Using cached examples ({len(cached)} examples)")
+                    test_examples = cached
+                    output_dir = Path(config.examples_dir)
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    output_path = output_dir / f"examples.{fmt}"
+                    write_examples(test_examples, str(output_path), fmt)
+                    print(f"Generated {len(test_examples)} examples -> {output_path}")
+                    return
+
+            print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
+            client = LLMClient.create(
+                config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+            )
+            gen = Generator(client)
+            test_examples = gen.generate_examples(endpoints, cov, config.areas)
+            test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
+            # Store in cache
+            put_cached_examples(api_doc, cov, config.areas, test_examples)
 
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -100,8 +133,9 @@ def examples(
 def plan(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
     output_format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format"),
+    llm_plan: bool = typer.Option(False, "--llm-plan", help="Use LLM for plan generation (slower)"),
 ):
-    """Orchestrate test examples into a test plan."""
+    """Orchestrate test examples into a test plan. Deterministic by default."""
     config = load_config(config_path)
     fmt = output_format or config.plan_format
 
@@ -115,12 +149,16 @@ def plan(
     print(f"Reading examples from {examples_file}...")
     test_examples = read_examples(str(examples_file), config.examples_format)
 
-    print(f"Generating plan for {len(test_examples)} examples...")
-    client = LLMClient.create(
-        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-    )
-    gen = Generator(client)
-    test_plan = gen.generate_plan(test_examples, config.coverage, config.areas)
+    if llm_plan:
+        print(f"Generating LLM plan for {len(test_examples)} examples...")
+        client = LLMClient.create(
+            config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+        )
+        gen = Generator(client)
+    else:
+        print(f"Generating deterministic plan for {len(test_examples)} examples...")
+        gen = Generator()
+    test_plan = gen.generate_plan(test_examples, config.coverage, config.areas, use_llm=llm_plan)
 
     plan_path = config.plan_path
     if not plan_path.endswith(f".{fmt}"):
@@ -206,6 +244,9 @@ def go(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
     coverage: Optional[str] = typer.Option(None, "--coverage", help="Coverage level"),
     mode: Optional[str] = typer.Option(None, "--mode", help="Execution mode: mock | real"),
+    fast: bool = typer.Option(False, "--fast", help="Schema-only generation (no LLM, instant)"),
+    llm_plan: bool = typer.Option(False, "--llm-plan", help="Use LLM for plan generation (slower)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, force LLM call"),
 ):
     """Run the full pipeline: examples -> plan -> run -> report."""
     config = load_config(config_path)
@@ -213,37 +254,54 @@ def go(
     exec_mode = mode or config.execution_mode
     doc_format = detect_format(api_doc)
 
-    client = LLMClient.create(
-        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-    )
-    gen = Generator(client)
-
     # Step 1: Examples
     print(f"\n{'='*50}")
     print(f"Step 1/3: Generating test examples")
     print(f"{'='*50}\n")
 
     if doc_format == "markdown":
+        client = LLMClient.create(
+            config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+        )
+        gen = Generator(client)
         doc_text = parse_text(api_doc)
         print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
         test_examples = gen.generate_examples_from_text(doc_text, cov, config.areas)
     else:
         endpoints = parse_openapi(api_doc)
         print(f"Parsed {len(endpoints)} endpoints from {api_doc}")
-        print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
-        print("  (this may take 10-60 seconds depending on the model)")
-        test_examples = gen.generate_examples(endpoints, cov, config.areas)
 
-    # Schema correction for OpenAPI docs
-    if doc_format != "markdown":
-        test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
-        print(f"Corrected examples against API spec")
+        if fast:
+            gen = Generator()
+            test_examples = gen.generate_examples_from_schema(endpoints, cov)
+        else:
+            # Check cache
+            if not no_cache:
+                cached = get_cached_examples(api_doc, cov, config.areas)
+                if cached:
+                    test_examples = cached
+                    gen = Generator()  # no LLM needed if cache hit
+                else:
+                    cached = None
+            else:
+                cached = None
+
+            if cached is None:
+                print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
+                client = LLMClient.create(
+                    config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+                )
+                gen = Generator(client)
+                test_examples = gen.generate_examples(endpoints, cov, config.areas)
+                test_examples = _correct_examples_against_endpoints(test_examples, endpoints)
+                put_cached_examples(api_doc, cov, config.areas, test_examples)
+            else:
+                print(f"Using cached examples ({len(cached)} examples)")
 
     output_dir = Path(config.examples_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     examples_path = output_dir / f"examples.{config.examples_format}"
     write_examples(test_examples, str(examples_path), config.examples_format)
-    print(f"Generated {len(test_examples)} examples -> {examples_path}")
 
     if len(test_examples) == 0:
         print("\nError: No test examples were generated. Check your LLM configuration:")
@@ -256,8 +314,13 @@ def go(
     print(f"\n{'='*50}")
     print(f"Step 2/3: Generating test plan")
     print(f"{'='*50}\n")
-    print(f"Calling {config.llm_model} to organize examples into a plan...")
-    test_plan = gen.generate_plan(test_examples, cov, config.areas)
+    if fast or not llm_plan:
+        plan_gen = Generator()
+        test_plan = plan_gen.generate_plan(test_examples, cov, config.areas)
+    else:
+        plan_gen = Generator(client if doc_format != "markdown" else
+            LLMClient.create(config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url))
+        test_plan = plan_gen.generate_plan(test_examples, cov, config.areas, use_llm=True)
     plan_path = config.plan_path
     write_plan(test_plan, plan_path, config.plan_format)
     print(f"Plan written -> {plan_path}")
@@ -311,6 +374,18 @@ def report(
     reporter.serve()
 
 
+@app.command()
+def cache_clear(
+    spec_path: str = typer.Argument(..., help="Path to the API spec whose cache to clear"),
+):
+    """Clear cached LLM responses for a spec. Forces regeneration on next run."""
+    count = clear_cache(spec_path)
+    if count:
+        print(f"Cleared {count} cache entr{'y' if count == 1 else 'ies'} for {spec_path}")
+    else:
+        print(f"No cache entries found for {spec_path}")
+
+
 def _correct_examples_against_endpoints(examples, endpoints):
     """Fix request bodies, status codes, and headers based on parsed API spec."""
     corrector = SchemaCorrector()
@@ -349,6 +424,49 @@ def _resolve_mock_spec(api_doc: str, config) -> str | None:
         return config_doc
 
     return None
+
+
+def _test_llm_connection(config_path: str | None = None) -> None:
+    config = load_config(config_path)
+
+    if not config.llm_api_key:
+        print("Error: No API key configured.")
+        print("  Set one in .apitest.yaml or via environment variable.")
+        print("  Run 'apitest init' to reconfigure.")
+        raise typer.Exit(code=1)
+
+    print(f"Testing connection to {config.llm_provider} (model: {config.llm_model})...")
+
+    client = LLMClient.create(
+        config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+    )
+    ok, message = client.ping()
+
+    if ok:
+        print(f"  Connection verified ({message})")
+        print()
+        print("  You're all set! Here's what you can do:")
+        print()
+        print("    # Full pipeline (recommended):")
+        print("    apitest go <your-api-doc> --mode mock")
+        print()
+        print("    # Or step by step:")
+        print("    apitest examples <your-api-doc>   # Generate test examples")
+        print("    apitest plan                      # Orchestrate into test plan")
+        print("    apitest run                       # Execute and generate report")
+        print("    apitest report                    # Re-serve the last report")
+        print()
+        print("    # Quick, no LLM assisted:")
+        print("    apitest go <your-api-doc> --fast --mode mock")
+    else:
+        print(f"  Connection failed: {message}")
+        print("\n  Troubleshooting:")
+        print(f"    - Check your API key: run 'apitest init' to reconfigure")
+        print(f"    - Check your network connection")
+        print(f"    - Provider: {config.llm_provider}, Model: {config.llm_model}")
+        if config.llm_base_url:
+            print(f"    - Base URL: {config.llm_base_url}")
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

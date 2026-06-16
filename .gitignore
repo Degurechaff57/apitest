@@ -10,3 +10,6 @@ test_plan.*
 .pytest_cache/
 *.egg-info/
 dist/
+.DS_Store
+.claude/
+.apitest_cache/

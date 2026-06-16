@@ -113,7 +113,7 @@ class TestGenerator:
         ])
 
         gen = Generator(llm)
-        plan = gen.generate_plan(examples, "smoke", ["functional"])
+        plan = gen.generate_plan(examples, "smoke", ["functional"], use_llm=True)
         assert plan.title == "Test Plan: Petstore"
         assert len(plan.phases) == 1
         assert plan.phases[0].examples == ["TC-PETS-001"]
