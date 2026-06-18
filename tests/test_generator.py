@@ -42,7 +42,7 @@ class MockLLM:
         self.responses = responses or []
         self.calls = []
 
-    def chat(self, system_prompt, user_prompt, temperature=0.3):
+    def chat(self, system_prompt, user_prompt, temperature=0.3, **kwargs):
         self.calls.append({"system": system_prompt, "user": user_prompt})
         if self.responses:
             return self.responses.pop(0)

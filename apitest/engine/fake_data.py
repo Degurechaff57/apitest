@@ -31,6 +31,22 @@ def generate_fake_value(
     if enum:
         return random.choice(enum)
 
+    name_lower = prop_name.lower()
+
+    # Name-specific overrides take priority over generic type defaults
+    if "message" in name_lower:
+        return "操作成功"
+    if "id" in name_lower:
+        return _next_auto_id()
+    if "count" in name_lower or "total" in name_lower:
+        return random.randint(100, 20000)
+    if "price" in name_lower:
+        return round(random.uniform(9.9, 999.0), 2)
+    if "page" in name_lower:
+        return 1
+    if "size" in name_lower:
+        return 20
+
     if schema_type in ("integer", "number"):
         lo = int(minimum) if minimum is not None else 0
         hi = int(maximum) if maximum is not None else 99999
@@ -38,8 +54,6 @@ def generate_fake_value(
 
     if schema_type == "boolean":
         return random.choice([True, False])
-
-    name_lower = prop_name.lower()
 
     if fmt == "email" or "email" in name_lower:
         return f"user{_next_auto_id()}@example.com"
@@ -53,6 +67,8 @@ def generate_fake_value(
         return str(_next_auto_id())
     if "phone" in name_lower:
         return f"138{random.randint(10000000, 99999999)}"
+    if "code" in name_lower:
+        return "123456"
     if "token" in name_lower:
         return f"eyJ{random.randint(100000, 999999)}.{random.randint(100000, 999999)}"
     if "name" in name_lower or "nickname" in name_lower:
@@ -63,22 +79,8 @@ def generate_fake_value(
         return random.choice(_SAMPLE_CONTENTS)
     if "tag" in name_lower:
         return random.sample(_SAMPLE_TAGS, min(3, len(_SAMPLE_TAGS)))
-    if "code" in name_lower:
-        return "123456"
-    if "message" in name_lower:
-        return "操作成功"
     if "gender" in name_lower:
         return random.choice([0, 1, 2])
-    if "count" in name_lower or "total" in name_lower:
-        return random.randint(100, 20000)
-    if "price" in name_lower:
-        return round(random.uniform(9.9, 999.0), 2)
-    if "id" in name_lower:
-        return _next_auto_id()
-    if "page" in name_lower:
-        return 1
-    if "size" in name_lower:
-        return 20
     if "visibility" in name_lower:
         return "public"
     if name_lower.startswith("has") or name_lower.startswith("is") or name_lower.startswith("allow") or name_lower.startswith("show"):

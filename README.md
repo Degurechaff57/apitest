@@ -33,11 +33,38 @@ apitest go specs/api.yaml --mode mock
 | Command | What it does |
 |---|---|
 | `apitest init` | Interactive setup wizard (LLM provider, API key, formats, coverage) |
+| `apitest test` | Test LLM connection — verifies API key and model access |
 | `apitest examples <doc>` | Parse API doc → LLM generates test examples → save to disk |
-| `apitest plan` | Read examples → LLM orchestrates into ordered test plan |
+| `apitest plan` | Read examples → deterministic plan (use `--llm-plan` for LLM) |
 | `apitest run` | Execute plan against mock or real server → Allure report |
-| `apitest go <doc>` | All-in-one: examples → plan → run → report |
+| `apitest go <doc>` | All-in-one: examples → preflight → plan → run → report |
 | `apitest report` | Re-serve the last Allure report |
+| `apitest cache-clear <doc>` | Clear cached LLM responses for a spec |
+
+## Key Options
+
+| Flag | Commands | What it does |
+|---|---|---|
+| `--fast` | `examples`, `go` | Schema-only generation — no LLM calls, instant results |
+| `--no-cache` | `examples`, `go` | Skip cache, force fresh LLM generation |
+| `--thinking` | `examples`, `plan`, `go` | Enable LLM thinking mode (better quality, ~3x slower) |
+| `--llm-plan` | `plan`, `go` | Use LLM for test plan generation instead of deterministic |
+| `--mode mock\|real` | `run`, `go` | Mock server or real API |
+| `--coverage smoke\|happy-path\|full` | `examples`, `go` | Test depth level |
+
+## Benchmark
+
+Tested on a 20-endpoint markdown API doc with DeepSeek V4, 3 parallel chunks, smoke coverage.
+
+| Condition | Time | Notes |
+|---|---|---|
+| No thinking + cold (no cache) | **15.2s** | Default mode — LLM generates examples |
+| No thinking + warm (cache hit) | **0.15s** | Instant re-run when spec unchanged |
+| Thinking enabled + cold | **49.6s** | 3.3x slower than default |
+| Thinking enabled + warm | **0.16s** | Cache bypasses LLM entirely |
+| `--fast` (schema-only, no LLM) | <0.1s | Instant, less realistic test data |
+
+Cache speedup: **100x** on re-runs. Thinking disabled is **3.3x faster** than enabled with minimal quality difference for structured API test generation.
 
 ## API Doc Formats
 
@@ -82,37 +109,40 @@ report:
 ## How It Works
 
 1. **LLM Parsing**: Reads your API doc and extracts endpoints, parameters, schemas
-2. **Schema Correction**: Cross-references LLM output against parsed schema to fix field names and status codes
-3. **Test Plan**: LLM organizes examples into phases ordered by endpoint dependencies
-4. **Mock Server**: Flask-based server with in-memory SQLite that serves schema-compliant responses
-5. **Pytest + Allure**: Generates pytest files grouped by resource, runs them, produces Allure report
+2. **Schema Correction** (OpenAPI): Cross-references LLM output against parsed schema to fix field names and status codes
+3. **Preflight Validation**: Runs every generated example against the mock server, correcting `expected_status` from actual responses — eliminates LLM hallucination errors
+4. **Test Plan**: Deterministic resource grouping (use `--llm-plan` for LLM-driven ordering)
+5. **Mock Server**: Flask-based server with in-memory SQLite that serves schema-compliant responses
+6. **Pytest + Allure**: Generates pytest files grouped by resource, runs them, produces HTML report served via Python HTTP server (no Java process leak)
 
 ## Example Output
 
 ```
-$ apitest go demo/specs/xiaohongshu-openapi.yaml --mode mock
+$ apitest go demo/specs/xiaohongshu-openapi.yaml --mode mock --coverage smoke
 
 ==================================================
 Step 1/3: Generating test examples
 ==================================================
 Parsed 17 endpoints
-Corrected examples against API spec
+Calling deepseek-v4-pro[1m] to generate examples (coverage: smoke)...
+  Splitting 17 endpoints into 2 chunks (2 parallel LLM calls)...
+  Preflight validating against mock server at http://127.0.0.1:51234...
+  Preflight: corrected 3 expected status codes (0 skipped/17 total)
 Generated 17 examples -> tests/examples/examples.json
 
 ==================================================
 Step 2/3: Generating test plan
 ==================================================
 Plan written -> test_plan.md
-  Phases: 8, Total: 17 examples
+  Phases: 4, Total: 17 examples
 
 ==================================================
 Step 3/3: Running tests
 ==================================================
-Mock server started at http://127.0.0.1:51234
 Running 17 tests (mock mode)...
-17 passed in 0.20s
+Allure report: http://127.0.0.1:51235 (auto-closes when CLI exits)
 
-All tests passed!
+17 passed in 0.20s — All tests passed!
 ```
 
 ## Tech Stack

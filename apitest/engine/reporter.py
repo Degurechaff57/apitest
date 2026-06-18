@@ -1,7 +1,15 @@
 import json
+import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
+
+
+def _get_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 
 def check_allure_installed() -> bool:
@@ -19,6 +27,7 @@ class Reporter:
         self.auto_serve = auto_serve
         self.results_dir = results_dir
         self.report_dir = "allure-report"
+        self._server = None
 
     def serve(self) -> None:
         if not check_allure_installed():
@@ -38,10 +47,38 @@ class Reporter:
         if self.auto_serve:
             report_index = Path(self.report_dir) / "index.html"
             if report_index.exists():
-                # Serve via HTTP — browsers block fetch() on file:// URLs
-                subprocess.run(["allure", "open", self.report_dir], check=False)
+                self._serve_http()
             else:
                 print("Report generation failed. Check allure-results for raw data.")
+
+    def _serve_http(self) -> None:
+        """Serve allure-report/ via Python HTTP server in a daemon thread.
+        No Java process left behind — server dies with the CLI process."""
+        import http.server
+        import os
+
+        report_dir = Path(self.report_dir).resolve()
+        port = _get_free_port()
+
+        # Change to report dir so SimpleHTTPRequestHandler serves it
+        original_dir = os.getcwd()
+
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=str(report_dir), **kwargs)
+
+            def log_message(self, fmt, *args):
+                pass  # suppress access logs
+
+        self._server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+        t = threading.Thread(target=self._server.serve_forever, daemon=True)
+        t.start()
+        print(f"Allure report: http://127.0.0.1:{port} (auto-closes when CLI exits)")
+
+    def stop(self) -> None:
+        if self._server:
+            self._server.shutdown()
+            self._server = None
 
     def _print_install_instructions(self) -> None:
         print("Allure CLI not found. Install it to generate HTML reports:")

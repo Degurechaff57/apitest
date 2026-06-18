@@ -209,10 +209,16 @@ def _make_response_data(operation: dict, schemas: dict, stored_data: dict | None
 
     # Unwrapped response
     if stored_data:
-        return stored_data
-    if is_list:
-        return [_generate_fake_data(schema, schemas) for _ in range(random.randint(1, 3))]
-    return _generate_fake_data(schema, schemas)
+        data = stored_data
+    elif is_list:
+        data = [_generate_fake_data(schema, schemas) for _ in range(random.randint(1, 3))]
+    else:
+        data = _generate_fake_data(schema, schemas)
+
+    # Normalize: if response has a 'code' field, it should match the success status
+    if isinstance(data, dict) and "code" in data:
+        data["code"] = 200
+    return data
 
 
 # ---- Route registration ----
@@ -231,6 +237,13 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
             body_required_fields = body_schema.get("required", [])
 
     resource = _extract_resource(spec_path)
+
+    def _safe_get_json():
+        """Get JSON body, normalizing non-dict types to empty dict."""
+        data = request.get_json(silent=True)
+        if data is None or not isinstance(data, dict):
+            return {}
+        return data
 
     def handler(**kwargs):
         if method == "get":
@@ -270,7 +283,7 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
                 return jsonify(_make_response_data(operation, schemas, is_list=is_list)), 200
 
         elif method == "post":
-            data = request.get_json(silent=True) or {}
+            data = _safe_get_json()
             if body_required_fields:
                 missing = [f for f in body_required_fields if f not in data]
                 if missing:
@@ -287,7 +300,7 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
             return jsonify(resp), success_code
 
         elif method == "put":
-            data = request.get_json(silent=True) or {}
+            data = _safe_get_json()
             if has_path_param:
                 resource_id = list(kwargs.values())[0] if kwargs else None
                 row = db.execute(
@@ -311,7 +324,7 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
             return jsonify(resp), 200
 
         elif method == "delete":
-            data = request.get_json(silent=True) or {}
+            data = _safe_get_json()
             if has_path_param:
                 resource_id = list(kwargs.values())[0] if kwargs else None
                 row = db.execute(
@@ -341,7 +354,7 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
             return jsonify(resp), success_code
 
         elif method == "patch":
-            data = request.get_json(silent=True) or {}
+            data = _safe_get_json()
             if has_path_param:
                 resource_id = list(kwargs.values())[0] if kwargs else None
                 row = db.execute(

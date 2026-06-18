@@ -24,22 +24,25 @@ def _is_retryable(exception: Exception) -> bool:
 class LLMClient(ABC):
     """Abstract LLM client. Use LLMClient.create() to get the right implementation."""
 
-    def __init__(self, model: str, api_key: str, base_url: str | None = None):
+    def __init__(self, model: str, api_key: str, base_url: str | None = None,
+                 thinking_enabled: bool = True):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
+        self.thinking_enabled = thinking_enabled
 
     @abstractmethod
-    def _send(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
+    def _send(self, system_prompt: str, user_prompt: str, temperature: float = 0.3,
+              max_tokens: int = 8192) -> str:
         """Raw chat implementation — each provider overrides this."""
 
     def chat(self, system_prompt: str, user_prompt: str, temperature: float = 0.3,
-             retries: int = 3) -> str:
+             retries: int = 3, max_tokens: int = 8192) -> str:
         """Send a chat completion with retry on transient errors."""
         last_error = None
         for attempt in range(retries):
             try:
-                return self._send(system_prompt, user_prompt, temperature)
+                return self._send(system_prompt, user_prompt, temperature, max_tokens)
             except Exception as e:
                 last_error = e
                 if attempt < retries - 1 and _is_retryable(e):
@@ -66,19 +69,21 @@ class LLMClient(ABC):
             return False, str(e)
 
     @staticmethod
-    def create(provider: str, model: str, api_key: str, base_url: str | None = None) -> "LLMClient":
+    def create(provider: str, model: str, api_key: str, base_url: str | None = None,
+               thinking_enabled: bool = True) -> "LLMClient":
         if provider == "openai":
-            return OpenAIClient(model, api_key)
+            return OpenAIClient(model, api_key, thinking_enabled=thinking_enabled)
         elif provider == "anthropic":
-            return AnthropicClient(model, api_key, base_url)
+            return AnthropicClient(model, api_key, base_url, thinking_enabled=thinking_enabled)
         elif provider == "custom":
-            return CustomClient(model, api_key, base_url)
+            return CustomClient(model, api_key, base_url, thinking_enabled=thinking_enabled)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
 
 class OpenAIClient(LLMClient):
-    def _send(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
+    def _send(self, system_prompt: str, user_prompt: str, temperature: float = 0.3,
+              max_tokens: int = 8192) -> str:
         from openai import OpenAI
         client = OpenAI(api_key=self.api_key, timeout=120.0, max_retries=0)
         response = client.chat.completions.create(
@@ -88,12 +93,14 @@ class OpenAIClient(LLMClient):
                 {"role": "user", "content": user_prompt},
             ],
             temperature=temperature,
+            max_tokens=max_tokens,
         )
         return response.choices[0].message.content or ""
 
 
 class AnthropicClient(LLMClient):
-    def _send(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
+    def _send(self, system_prompt: str, user_prompt: str, temperature: float = 0.3,
+              max_tokens: int = 8192) -> str:
         from anthropic import Anthropic
 
         client_kwargs = {"timeout": 120.0, "max_retries": 0}
@@ -107,7 +114,7 @@ class AnthropicClient(LLMClient):
 
         client = Anthropic(**client_kwargs)
         create_kwargs: dict = {
-            "max_tokens": 8192,
+            "max_tokens": max_tokens,
             "model": self.model,
             "system": [
                 {
@@ -120,11 +127,8 @@ class AnthropicClient(LLMClient):
             "temperature": temperature,
         }
 
-        # DeepSeek models default to thinking mode which adds 30-60s latency.
-        # Disable it for non-reasoning tasks like test generation.
-        if "deepseek" in self.model.lower() or (
-            self.base_url and "deepseek" in self.base_url.lower()
-        ):
+        # Respect thinking_enabled flag (default: enabled for standard models)
+        if not self.thinking_enabled:
             create_kwargs["thinking"] = {"type": "disabled"}
 
         response = client.messages.create(**create_kwargs)
@@ -137,7 +141,8 @@ class AnthropicClient(LLMClient):
 
 class CustomClient(LLMClient):
     """OpenAI-compatible endpoint (e.g., self-hosted, proxies)."""
-    def _send(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
+    def _send(self, system_prompt: str, user_prompt: str, temperature: float = 0.3,
+              max_tokens: int = 8192) -> str:
         from openai import OpenAI
         client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=120.0, max_retries=0)
         response = client.chat.completions.create(
@@ -147,5 +152,6 @@ class CustomClient(LLMClient):
                 {"role": "user", "content": user_prompt},
             ],
             temperature=temperature,
+            max_tokens=max_tokens,
         )
         return response.choices[0].message.content or ""

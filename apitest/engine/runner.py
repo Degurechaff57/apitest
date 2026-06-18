@@ -147,11 +147,12 @@ def generate_pytest_file(resource: str, examples, base_url: str) -> str:
         # Response body: verify basic structure (schema-driven, not LLM-driven)
         lines.append("        body = res.json()")
         lines.append("        assert body is not None, 'Response body should not be empty'")
-        lines.append("        # Check wrapped response envelope if present")
-        lines.append("        if isinstance(body, dict) and 'code' in body:")
-        lines.append("            assert body['code'] == 200, f'Expected code 200, got {body.get(\"code\")}'")
-        lines.append("        if isinstance(body, dict) and 'data' in body:")
-        lines.append("            assert body['data'] is not None, 'data field should not be null'")
+        # Only check success envelope for 2xx responses
+        lines.append(f"        if {example.expected_status} < 400:")
+        lines.append("            if isinstance(body, dict) and 'code' in body:")
+        lines.append("                assert body['code'] == 200, f'Expected code 200, got {body.get(\"code\")}'")
+        lines.append("            if isinstance(body, dict) and 'data' in body:")
+        lines.append("                assert body['data'] is not None, 'data field should not be null'")
         for field in example.expected_body_contains:
             lines.append(f"        # Field check: response should contain data related to '{_escape_py_str(field)}'")
 

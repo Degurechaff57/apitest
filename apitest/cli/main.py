@@ -15,6 +15,7 @@ from apitest.engine.mock_server import create_mock_app, MockServer
 from apitest.cli.init_wizard import InitWizard
 from apitest.engine.schema_corrector import SchemaCorrector
 from apitest.engine.cache import get_cached_examples, put_cached_examples, clear_cache
+from apitest.engine.preflight import PreflightValidator
 
 app = typer.Typer(
     name="apitest",
@@ -72,6 +73,7 @@ def examples(
     output_format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format"),
     fast: bool = typer.Option(False, "--fast", help="Schema-only generation (no LLM, instant)"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, force LLM call"),
+    thinking: bool = typer.Option(False, "--thinking", help="Enable LLM thinking mode (slower, more thorough)"),
 ):
     """Generate test examples from an API document."""
     config = load_config(config_path)
@@ -81,14 +83,28 @@ def examples(
     doc_format = detect_format(api_doc)
 
     if doc_format == "markdown":
+        # Check cache
+        if not no_cache:
+            cached = get_cached_examples(api_doc, cov, config.areas)
+            if cached:
+                print(f"Using cached examples ({len(cached)} examples)")
+                output_dir = Path(config.examples_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = output_dir / f"examples.{fmt}"
+                write_examples(cached, str(output_path), fmt)
+                print(f"Generated {len(cached)} examples -> {output_path}")
+                return
+
         client = LLMClient.create(
             config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+            thinking_enabled=thinking,
         )
         gen = Generator(client)
         print(f"Reading API doc from {api_doc}...")
         doc_text = parse_text(api_doc)
         print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
         test_examples = gen.generate_examples_from_text(doc_text, cov, config.areas)
+        put_cached_examples(api_doc, cov, config.areas, test_examples)
     else:
         print(f"Parsing {api_doc}...")
         endpoints = parse_openapi(api_doc)
@@ -114,6 +130,7 @@ def examples(
             print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
             client = LLMClient.create(
                 config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+                thinking_enabled=thinking,
             )
             gen = Generator(client)
             test_examples = gen.generate_examples(endpoints, cov, config.areas)
@@ -134,6 +151,7 @@ def plan(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
     output_format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format"),
     llm_plan: bool = typer.Option(False, "--llm-plan", help="Use LLM for plan generation (slower)"),
+    thinking: bool = typer.Option(False, "--thinking", help="Enable LLM thinking mode"),
 ):
     """Orchestrate test examples into a test plan. Deterministic by default."""
     config = load_config(config_path)
@@ -247,6 +265,7 @@ def go(
     fast: bool = typer.Option(False, "--fast", help="Schema-only generation (no LLM, instant)"),
     llm_plan: bool = typer.Option(False, "--llm-plan", help="Use LLM for plan generation (slower)"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, force LLM call"),
+    thinking: bool = typer.Option(False, "--thinking", help="Enable LLM thinking mode (slower, more thorough)"),
 ):
     """Run the full pipeline: examples -> plan -> run -> report."""
     config = load_config(config_path)
@@ -260,13 +279,29 @@ def go(
     print(f"{'='*50}\n")
 
     if doc_format == "markdown":
-        client = LLMClient.create(
-            config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-        )
-        gen = Generator(client)
-        doc_text = parse_text(api_doc)
-        print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
-        test_examples = gen.generate_examples_from_text(doc_text, cov, config.areas)
+        # Check cache
+        if not no_cache:
+            cached = get_cached_examples(api_doc, cov, config.areas)
+            if cached:
+                test_examples = cached
+                gen = Generator()  # no LLM needed
+            else:
+                cached = None
+        else:
+            cached = None
+
+        if cached is None:
+            client = LLMClient.create(
+                config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+                thinking_enabled=thinking,
+            )
+            gen = Generator(client)
+            doc_text = parse_text(api_doc)
+            print(f"Analyzing document with {config.llm_model} (coverage: {cov})...")
+            test_examples = gen.generate_examples_from_text(doc_text, cov, config.areas)
+            put_cached_examples(api_doc, cov, config.areas, test_examples)
+        else:
+            print(f"Using cached examples ({len(cached)} examples)")
     else:
         endpoints = parse_openapi(api_doc)
         print(f"Parsed {len(endpoints)} endpoints from {api_doc}")
@@ -310,6 +345,30 @@ def go(
         print(f"  API key set: {'yes' if config.llm_api_key else 'NO — check your .apitest.yaml or env vars'}")
         raise typer.Exit(code=1)
 
+    # Step 1.5: Start mock server early for preflight validation
+    mock_server = None
+    if exec_mode == "mock":
+        import yaml
+        mock_spec_path = _resolve_mock_spec(api_doc, config)
+        if mock_spec_path is None:
+            print("Error: Mock mode requires an OpenAPI spec file.")
+            print(f"  The doc '{api_doc}' is a markdown file.")
+            print(f"  Provide an OpenAPI YAML/JSON spec, or use --mode real.")
+            raise typer.Exit(code=1)
+        with open(mock_spec_path) as f:
+            spec = yaml.safe_load(f)
+        mock_app = create_mock_app(spec)
+        mock_server = MockServer(mock_app, port=config.execution_mock_server_port)
+        mock_server.start()
+
+        # Preflight: run each example against mock, correct expected_status
+        print(f"\n  Preflight validating against mock server at {mock_server.url}...")
+        validator = PreflightValidator(mock_server.url)
+        test_examples = validator.validate(test_examples)
+        # Update cache and disk with corrected examples
+        put_cached_examples(api_doc, cov, config.areas, test_examples)
+        write_examples(test_examples, str(examples_path), config.examples_format)
+
     # Step 2: Plan
     print(f"\n{'='*50}")
     print(f"Step 2/3: Generating test plan")
@@ -326,27 +385,10 @@ def go(
     print(f"Plan written -> {plan_path}")
     print(f"  Phases: {len(test_plan.phases)}, Total: {test_plan.total_examples} examples")
 
-    # Step 3: Execute
+    # Step 3: Execute (mock server already running)
     print(f"\n{'='*50}")
     print(f"Step 3/3: Running tests")
     print(f"{'='*50}\n")
-    mock_server = None
-    if exec_mode == "mock":
-        import yaml
-        mock_spec_path = _resolve_mock_spec(api_doc, config)
-        if mock_spec_path is None:
-            print("Error: Mock mode requires an OpenAPI spec file.")
-            print(f"  The doc '{api_doc}' is a markdown file.")
-            print(f"  Provide an OpenAPI YAML/JSON spec, or use --mode real.")
-            print(f"  Tip: place an OpenAPI spec alongside your markdown doc,")
-            print(f"       e.g. demo/specs/<name>-openapi.yaml")
-            raise typer.Exit(code=1)
-        with open(mock_spec_path) as f:
-            spec = yaml.safe_load(f)
-        mock_app = create_mock_app(spec)
-        mock_server = MockServer(mock_app, port=config.execution_mock_server_port)
-        mock_server.start()
-        print(f"Mock server started at {mock_server.url}")
 
     try:
         print(f"Running {test_plan.total_examples} tests ({exec_mode} mode)...")

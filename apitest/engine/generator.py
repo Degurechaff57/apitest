@@ -177,14 +177,46 @@ class Generator:
         )
 
     def generate_examples_from_text(self, doc_text: str, coverage: str, area_names: list[str]):
-        """Generate examples directly from raw API doc text (markdown, txt, etc.)."""
+        """Generate examples directly from raw API doc text (markdown, txt, etc.).
+
+        Large documents are split on ## section boundaries and processed in parallel.
+        """
         areas = registry.get_enabled(area_names)
-        if len(areas) == 1:
-            area = areas[0]
-            if hasattr(area, "generate_examples_from_text"):
-                return area.generate_examples_from_text(doc_text, coverage, self.llm)
+        if len(areas) != 1:
+            return self._generate_text_multi_area(doc_text, coverage, areas)
+
+        area = areas[0]
+        if not hasattr(area, "generate_examples_from_text"):
             return area.generate_examples([], coverage, self.llm)
 
+        # Split large docs into chunks at section boundaries.
+        # Full coverage needs smaller chunks (6x more examples per section).
+        chunks = self._split_markdown(doc_text, coverage)
+        if len(chunks) <= 1 or self.llm is None:
+            return area.generate_examples_from_text(doc_text, coverage, self.llm)
+
+        print(f"  Splitting doc into {len(chunks)} sections for parallel generation...")
+        all_examples = []
+        # Cap at 3 concurrent to avoid rate limiting on shared API keys
+        max_workers = min(len(chunks), 3)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for i, chunk in enumerate(chunks):
+                futures[executor.submit(
+                    area.generate_examples_from_text, chunk, coverage, self.llm
+                )] = i
+            for future in concurrent.futures.as_completed(futures):
+                idx = futures[future]
+                try:
+                    all_examples.extend(future.result())
+                except Exception as e:
+                    print(f"  Section {idx + 1} failed: {e}")
+
+        self._reindex_examples(all_examples)
+        return all_examples
+
+    def _generate_text_multi_area(self, doc_text, coverage, areas):
+        """Generate examples from text across multiple areas in parallel."""
         all_examples = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(areas)) as executor:
             futures = {}
@@ -197,6 +229,38 @@ class Generator:
             for future in concurrent.futures.as_completed(futures):
                 all_examples.extend(future.result())
         return all_examples
+
+    @staticmethod
+    def _split_markdown(doc_text: str, coverage: str = "smoke") -> list[str]:
+        """Split a markdown API doc into sections, keeping preamble with each chunk.
+
+        Splits at ## headers. Chunk sizes adapt to coverage level:
+        - smoke/happy-path: 2-3 sections per chunk
+        - full: 1 section per chunk (6x more examples per section)
+        """
+        # Split on ## section headers
+        sections = re.split(r'\n(?=## \d+\. )', doc_text)
+        if len(sections) <= 2:
+            sections = re.split(r'\n(?=## [A-Z])', doc_text)
+        if len(sections) <= 2:
+            return [doc_text]
+
+        preamble = sections[0]
+        body_sections = sections[1:]
+
+        # Full coverage: 1 section per chunk to avoid timeouts
+        if coverage == "full":
+            chunks = [preamble + "\n" + s for s in body_sections]
+            return chunks if len(chunks) > 1 else [doc_text]
+
+        # Smoke/happy-path: group 2-3 sections per chunk
+        chunk_size = max(2, len(body_sections) // max(2, min(4, len(body_sections) // 2)))
+        chunks = []
+        for i in range(0, len(body_sections), chunk_size):
+            chunk_text = preamble + "\n" + "\n".join(body_sections[i:i + chunk_size])
+            chunks.append(chunk_text)
+
+        return chunks if len(chunks) > 1 else [doc_text]
 
     def generate_plan(self, examples, coverage, area_names, use_llm=False):
         """Generate a test plan. Deterministic by default; pass use_llm=True for LLM."""

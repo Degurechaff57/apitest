@@ -152,7 +152,8 @@ Each example object:
 }}
 """
 
-        response = llm.chat(FUNCTIONAL_SYSTEM_PROMPT, user_prompt)
+        max_tok = _estimate_max_tokens(len(endpoints), coverage)
+        response = llm.chat(FUNCTIONAL_SYSTEM_PROMPT, user_prompt, max_tokens=max_tok)
         return self._parse_examples(response)
 
     def generate_examples_from_text(self, doc_text: str, coverage: str, llm) -> list:
@@ -184,7 +185,10 @@ Each example object:
 }}
 """
 
-        response = llm.chat(FUNCTIONAL_SYSTEM_PROMPT, user_prompt)
+        # Estimate endpoint count from doc size: ~30 lines per endpoint
+        est_endpoints = max(1, doc_text.count("\n") // 30)
+        max_tok = _estimate_max_tokens(est_endpoints, coverage)
+        response = llm.chat(FUNCTIONAL_SYSTEM_PROMPT, user_prompt, max_tokens=max_tok)
         return self._parse_examples(response)
 
     def generate_test_code(self, examples, llm) -> str:
@@ -212,8 +216,7 @@ Import allure: from allure import feature, story, step
         return self._extract_code(response)
 
     def _parse_examples(self, response: str) -> list[TestExample]:
-        # Strip code fences and text preamble — some LLMs wrap JSON in ``` fences
-        # and/or include explanatory text before the JSON
+        # Strip code fences and text preamble
         cleaned = re.sub(r'```\w*\n?', '', response)
         cleaned = cleaned.strip()
 
@@ -224,7 +227,6 @@ Import allure: from allure import feature, story, step
         if start == -1:
             start = cleaned.find('{\n    "examples"')
         if start == -1:
-            # Last resort: find "examples" and backtrack to nearest {
             ex_pos = cleaned.find('"examples"')
             if ex_pos >= 0:
                 start = cleaned.rfind('{', 0, ex_pos)
@@ -240,17 +242,83 @@ Import allure: from allure import feature, story, step
                     if depth == 0:
                         end = i + 1
                         break
-            json_str = cleaned[start:end]
+            if depth == 0:
+                # Complete JSON — extract from start to matching }
+                json_str = cleaned[start:end]
+            else:
+                # Truncated JSON (max_tokens cutoff) — take from start to end
+                json_str = cleaned[start:]
         else:
             json_str = cleaned
 
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
+            # Response may be truncated (max_tokens limit). Try to salvage
+            # individual example objects that are complete.
+            examples = self._extract_partial_examples(json_str)
+            if examples:
+                print(f"  Recovered {len(examples)} examples from partial JSON")
+                return examples
             print(f"Warning: LLM response could not be parsed as JSON.")
             print(f"Response preview (first 500 chars): {response[:500]}")
             return []
         return [TestExample.from_dict(e) for e in data.get("examples", [])]
+
+    @staticmethod
+    def _extract_partial_examples(text: str) -> list[TestExample]:
+        """Extract complete example objects from truncated JSON by repairing
+        the most common truncation pattern: the last object is cut off mid-field.
+        """
+        arr_match = re.search(r'"examples"\s*:\s*\[', text)
+        if not arr_match:
+            return []
+        arr_start = arr_match.end()
+        body = text[arr_start:]
+
+        examples = []
+        i = 0
+        while i < len(body):
+            if body[i] == '{':
+                depth = 0
+                end = i
+                for j in range(i, len(body)):
+                    if body[j] == '{':
+                        depth += 1
+                    elif body[j] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            end = j + 1
+                            break
+                if depth == 0:
+                    try:
+                        obj = json.loads(body[i:end])
+                        if "id" in obj:
+                            examples.append(TestExample.from_dict(obj))
+                    except json.JSONDecodeError:
+                        pass
+                    i = end
+                    continue
+                else:
+                    # Last object is truncated — close open brackets/braces once
+                    snippet = body[i:]
+                    open_b = snippet.count('{') - snippet.count('}')
+                    open_arr = snippet.count('[') - snippet.count(']')
+                    in_str = (snippet.count('"') % 2) != 0
+                    repaired = snippet
+                    if in_str:
+                        repaired += '"'
+                    repaired += ']' * open_arr
+                    repaired += '}' * open_b
+                    try:
+                        obj = json.loads(repaired)
+                        if "id" in obj and isinstance(obj, dict):
+                            examples.append(TestExample.from_dict(obj))
+                    except json.JSONDecodeError:
+                        pass
+                    break
+            i += 1
+        return examples
 
     def _extract_code(self, response: str) -> str:
         match = re.search(r"```python\n([\s\S]*?)```", response)
@@ -260,6 +328,18 @@ Import allure: from allure import feature, story, step
         if match:
             return match.group(1).strip()
         return response.strip()
+
+
+def _estimate_max_tokens(num_endpoints: int, coverage: str) -> int:
+    """Estimate output tokens needed based on endpoints and coverage level.
+
+    One example is ~300 chars (~75 tokens) of JSON.
+    Full coverage of 20 endpoints = 120 examples ≈ 9000+ tokens.
+    """
+    categories = COVERAGE_LEVELS.get(coverage, COVERAGE_LEVELS["happy-path"])
+    est_examples = num_endpoints * len(categories)
+    # ~80 tokens per example + 2048 overhead for JSON structure and text preamble
+    return min(max(4096, est_examples * 80 + 2048), 32768)
 
 
 # Self-register on import

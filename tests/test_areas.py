@@ -82,7 +82,7 @@ class TestFunctionalArea:
         area = FunctionalArea()
 
         class MockLLM:
-            def chat(self, system_prompt, user_prompt, temperature=0.3):
+            def chat(self, system_prompt, user_prompt, temperature=0.3, **kwargs):
                 import json
                 return json.dumps({
                     "examples": [{
@@ -109,7 +109,7 @@ class TestFunctionalArea:
         area = FunctionalArea()
 
         class MockLLM:
-            def chat(self, system_prompt, user_prompt, temperature=0.3):
+            def chat(self, system_prompt, user_prompt, temperature=0.3, **kwargs):
                 return "def test_example():\n    assert True\n"
 
         from apitest.models.example import TestExample
