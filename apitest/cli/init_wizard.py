@@ -1,4 +1,11 @@
+import os
+
 import questionary
+
+_MODEL_ENV_VARS = {
+    "anthropic": "ANTHROPIC_MODEL",
+    "openai": "OPENAI_MODEL",
+}
 
 
 class InitWizard:
@@ -39,13 +46,24 @@ class InitWizard:
             answers["api_key_env"] = ""
             answers["api_key_manual"] = manual_key
 
+        # Detect model from environment variable
+        env_model = ""
+        model_env_var = _MODEL_ENV_VARS.get(provider, "")
+        if model_env_var:
+            env_model = os.environ.get(model_env_var, "")
+
         preset_models = {
             "anthropic": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
             "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
             "custom": [],
         }
         presets = preset_models.get(provider, [])
-        choices = [questionary.Choice(m, value=m) for m in presets]
+        choices = []
+        if env_model:
+            choices.append(questionary.Choice(
+                f"{env_model} (from ${model_env_var})", value=env_model,
+            ))
+        choices += [questionary.Choice(m, value=m) for m in presets]
         choices.append(questionary.Choice("Custom (type model name)", value="__custom__"))
 
         model = questionary.select("Model:", choices=choices).ask()
@@ -124,6 +142,8 @@ class InitWizard:
         ]
         if answers.get("base_url"):
             lines.append(f"  base_url: {answers['base_url']}")
+        lines.append("  thinking_enabled: true   # disable via --no-thinking if you trust the LLM or want fewer tokens")
+        lines.append("  cache_enabled: true      # skip cache with --no-cache")
 
         lines += [
             "",

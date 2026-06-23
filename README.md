@@ -10,7 +10,7 @@ API Doc → [LLM] → Test Examples → Test Plan → [You Review] → Pytest + 
 
 ```bash
 git clone <repo-url> && cd apitest
-uv pip install -e .
+uv sync
 ```
 
 Requirements: Python 3.10+, [Allure CLI](https://docs.qameta.io/allure-report/#_installing_a_commandline) (`brew install allure` on macOS).
@@ -47,7 +47,7 @@ apitest go specs/api.yaml --mode mock
 |---|---|---|
 | `--fast` | `examples`, `go` | Schema-only generation — no LLM calls, instant results |
 | `--no-cache` | `examples`, `go` | Skip cache, force fresh LLM generation |
-| `--thinking` | `examples`, `plan`, `go` | Enable LLM thinking mode (better quality, ~3x slower) |
+| `--thinking` / `--no-thinking` | `examples`, `plan`, `go` | Toggle LLM thinking mode. On by default for better quality; disable with `--no-thinking` if you trust the LLM or want lower token usage (~3x faster) |
 | `--llm-plan` | `plan`, `go` | Use LLM for test plan generation instead of deterministic |
 | `--mode mock\|real` | `run`, `go` | Mock server or real API |
 | `--coverage smoke\|happy-path\|full` | `examples`, `go` | Test depth level |
@@ -81,6 +81,8 @@ llm:
   provider: anthropic          # anthropic | openai | custom
   model: claude-sonnet-4-6
   api_key: ${ANTHROPIC_API_KEY}
+  thinking_enabled: true       # on by default; set false or use --no-thinking to disable
+  cache_enabled: true          # set false or use --no-cache to skip cache
 
 api_doc: specs/openapi.yaml
 
@@ -114,6 +116,51 @@ report:
 4. **Test Plan**: Deterministic resource grouping (use `--llm-plan` for LLM-driven ordering)
 5. **Mock Server**: Flask-based server with in-memory SQLite that serves schema-compliant responses
 6. **Pytest + Allure**: Generates pytest files grouped by resource, runs them, produces HTML report served via Python HTTP server (no Java process leak)
+
+## Mock Mode Specification
+
+When `--mode mock` is used, apitest starts a Flask-based mock server that serves schema-compliant responses without needing a real backend.
+
+### Architecture
+
+```
+Flask app (daemon thread) + in-memory SQLite
+  ├── Schema parser: extracts response schemas from OpenAPI spec
+  ├── Fake data generator: produces realistic values per property name/type/constraints
+  └── Stateful store: remembers POST/PUT data so GET returns consistent results
+```
+
+### Supported Operations
+
+| Method | Behavior |
+|---|---|
+| `GET /resource` | Returns generated list with pagination wrapper (`{code, message, data: [...]}`) |
+| `GET /resource/{id}` | Returns stored item if found, otherwise generates fake item with that ID |
+| `POST /resource` | Validates required body fields, stores item, returns success response with generated ID |
+| `PUT /resource/{id}` | Updates stored item (404 if not found), returns merged result |
+| `PATCH /resource/{id}` | Partial update of stored item (404 if not found) |
+| `DELETE /resource/{id}` | Removes item from store, returns 204 (idempotent — succeeds even if absent) |
+
+### Schema Resolution
+
+1. Response schema is extracted from the first 2xx response in the OpenAPI operation
+2. `$ref` chains are resolved against `components/schemas`
+3. For wrapped responses (`{code, message, data}`), the `data` sub-schema is used for payload generation
+4. For list endpoints, the `data.list` items schema generates array elements
+
+### Fake Data Generation Rules
+
+- Property **names** drive values: `email` → `user@example.com`, `phone` → `138...`, `price` → random float, `id` → auto-increment integer
+- Schema **types and constraints** are respected: `enum`, `min`/`max`, `minLength`/`maxLength`, `format` (email, date-time, uri, uuid)
+- Boolean names starting with `is`/`has`/`allow`/`show` default to `true`
+- Tags/arrays return 1-3 random samples from a curated Chinese + English list
+
+### Limitations
+
+- Request body validation only checks `required` fields at the top level — nested required fields are not validated
+- No authentication enforcement — the mock server accepts any `Authorization` header
+- No business logic — relationships between resources (e.g., "user must exist before creating a post") are not enforced
+- Schema-less responses (operations with no 2xx response schema) fall back to empty `{}` or `[]`
 
 ## Example Output
 

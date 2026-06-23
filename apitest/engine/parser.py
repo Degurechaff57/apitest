@@ -28,11 +28,11 @@ def parse_openapi(filepath: str) -> list[Endpoint]:
     endpoints: list[Endpoint] = []
     paths = spec.get("paths", {})
 
+    _HTTP_METHODS = {"get", "post", "put", "delete", "patch", "options", "head", "trace"}
+
     for path, methods in paths.items():
-        for method in ["get", "post", "put", "delete", "patch", "options", "head"]:
-            operation = methods.get(method)
-            if operation is None:
-                continue
+        for method in [m for m in methods if m in _HTTP_METHODS]:
+            operation = methods[method]
             endpoint = _parse_operation(method.upper(), path, operation, spec)
             endpoints.append(endpoint)
 

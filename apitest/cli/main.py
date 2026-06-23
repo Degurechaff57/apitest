@@ -19,7 +19,7 @@ from apitest.engine.preflight import PreflightValidator
 
 app = typer.Typer(
     name="apitest",
-    help="AI-powered API test automation toolkit",
+    help="Generate, execute, and report on API tests from any spec — powered by LLMs",
 )
 
 
@@ -73,18 +73,23 @@ def examples(
     output_format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format"),
     fast: bool = typer.Option(False, "--fast", help="Schema-only generation (no LLM, instant)"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, force LLM call"),
-    thinking: bool = typer.Option(False, "--thinking", help="Enable LLM thinking mode (slower, more thorough)"),
+    thinking: Optional[bool] = typer.Option(
+        None, "--thinking/--no-thinking",
+        help="Enable LLM thinking mode (on by default; disable if you trust the LLM or want fewer tokens)",
+    ),
 ):
     """Generate test examples from an API document."""
     config = load_config(config_path)
     fmt = output_format or config.examples_format
     cov = coverage or config.coverage
+    effective_thinking = config.llm_thinking_enabled if thinking is None else thinking
+    skip_cache = no_cache or not config.llm_cache_enabled
 
     doc_format = detect_format(api_doc)
 
     if doc_format == "markdown":
         # Check cache
-        if not no_cache:
+        if not skip_cache:
             cached = get_cached_examples(api_doc, cov, config.areas)
             if cached:
                 print(f"Using cached examples ({len(cached)} examples)")
@@ -97,7 +102,7 @@ def examples(
 
         client = LLMClient.create(
             config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-            thinking_enabled=thinking,
+            thinking_enabled=effective_thinking,
         )
         gen = Generator(client)
         print(f"Reading API doc from {api_doc}...")
@@ -115,7 +120,7 @@ def examples(
             test_examples = gen.generate_examples_from_schema(endpoints, cov)
         else:
             # Check cache
-            if not no_cache:
+            if not skip_cache:
                 cached = get_cached_examples(api_doc, cov, config.areas)
                 if cached:
                     print(f"Using cached examples ({len(cached)} examples)")
@@ -130,7 +135,7 @@ def examples(
             print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
             client = LLMClient.create(
                 config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-                thinking_enabled=thinking,
+                thinking_enabled=effective_thinking,
             )
             gen = Generator(client)
             test_examples = gen.generate_examples(endpoints, cov, config.areas)
@@ -151,10 +156,14 @@ def plan(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
     output_format: Optional[str] = typer.Option(None, "--format", "-f", help="Output format"),
     llm_plan: bool = typer.Option(False, "--llm-plan", help="Use LLM for plan generation (slower)"),
-    thinking: bool = typer.Option(False, "--thinking", help="Enable LLM thinking mode"),
+    thinking: Optional[bool] = typer.Option(
+        None, "--thinking/--no-thinking",
+        help="Enable LLM thinking mode (on by default; disable if you trust the LLM or want fewer tokens)",
+    ),
 ):
     """Orchestrate test examples into a test plan. Deterministic by default."""
     config = load_config(config_path)
+    effective_thinking = config.llm_thinking_enabled if thinking is None else thinking
     fmt = output_format or config.plan_format
 
     examples_dir = Path(config.examples_dir)
@@ -171,6 +180,7 @@ def plan(
         print(f"Generating LLM plan for {len(test_examples)} examples...")
         client = LLMClient.create(
             config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+            thinking_enabled=effective_thinking,
         )
         gen = Generator(client)
     else:
@@ -238,13 +248,13 @@ def run(
         mock_server.start()
         print(f"Mock server started at {mock_server.url}")
 
+    reporter = Reporter(auto_serve=config.report_auto_serve, results_dir=config.report_dir)
     try:
         print(f"Running {test_plan.total_examples} tests ({exec_mode} mode)...")
         runner = TestRunner(config)
         exit_code = runner.run(test_examples, test_plan, exec_mode, mock_server)
 
-        reporter = Reporter(auto_serve=config.report_auto_serve, results_dir=config.report_dir)
-        reporter.serve()
+        reporter.serve(notify=True)
 
         if exit_code != 0:
             print(f"\nTests completed with failures (exit code: {exit_code})")
@@ -254,6 +264,7 @@ def run(
         if mock_server:
             mock_server.stop()
             print("Mock server stopped.")
+        reporter.stop()
 
 
 @app.command()
@@ -265,12 +276,17 @@ def go(
     fast: bool = typer.Option(False, "--fast", help="Schema-only generation (no LLM, instant)"),
     llm_plan: bool = typer.Option(False, "--llm-plan", help="Use LLM for plan generation (slower)"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, force LLM call"),
-    thinking: bool = typer.Option(False, "--thinking", help="Enable LLM thinking mode (slower, more thorough)"),
+    thinking: Optional[bool] = typer.Option(
+        None, "--thinking/--no-thinking",
+        help="Enable LLM thinking mode (on by default; disable if you trust the LLM or want fewer tokens)",
+    ),
 ):
     """Run the full pipeline: examples -> plan -> run -> report."""
     config = load_config(config_path)
     cov = coverage or config.coverage
     exec_mode = mode or config.execution_mode
+    effective_thinking = config.llm_thinking_enabled if thinking is None else thinking
+    skip_cache = no_cache or not config.llm_cache_enabled
     doc_format = detect_format(api_doc)
 
     # Step 1: Examples
@@ -280,7 +296,7 @@ def go(
 
     if doc_format == "markdown":
         # Check cache
-        if not no_cache:
+        if not skip_cache:
             cached = get_cached_examples(api_doc, cov, config.areas)
             if cached:
                 test_examples = cached
@@ -293,7 +309,7 @@ def go(
         if cached is None:
             client = LLMClient.create(
                 config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
-                thinking_enabled=thinking,
+                thinking_enabled=effective_thinking,
             )
             gen = Generator(client)
             doc_text = parse_text(api_doc)
@@ -311,7 +327,7 @@ def go(
             test_examples = gen.generate_examples_from_schema(endpoints, cov)
         else:
             # Check cache
-            if not no_cache:
+            if not skip_cache:
                 cached = get_cached_examples(api_doc, cov, config.areas)
                 if cached:
                     test_examples = cached
@@ -325,6 +341,7 @@ def go(
                 print(f"Calling {config.llm_model} to generate examples (coverage: {cov})...")
                 client = LLMClient.create(
                     config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+                    thinking_enabled=effective_thinking,
                 )
                 gen = Generator(client)
                 test_examples = gen.generate_examples(endpoints, cov, config.areas)
@@ -378,7 +395,8 @@ def go(
         test_plan = plan_gen.generate_plan(test_examples, cov, config.areas)
     else:
         plan_gen = Generator(client if doc_format != "markdown" else
-            LLMClient.create(config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url))
+            LLMClient.create(config.llm_provider, config.llm_model, config.llm_api_key, config.llm_base_url,
+                             thinking_enabled=effective_thinking))
         test_plan = plan_gen.generate_plan(test_examples, cov, config.areas, use_llm=True)
     plan_path = config.plan_path
     write_plan(test_plan, plan_path, config.plan_format)
@@ -390,12 +408,12 @@ def go(
     print(f"Step 3/3: Running tests")
     print(f"{'='*50}\n")
 
+    reporter = Reporter(auto_serve=config.report_auto_serve, results_dir=config.report_dir)
     try:
         print(f"Running {test_plan.total_examples} tests ({exec_mode} mode)...")
         runner = TestRunner(config)
         exit_code = runner.run(test_examples, test_plan, exec_mode, mock_server)
-        reporter = Reporter(auto_serve=config.report_auto_serve, results_dir=config.report_dir)
-        reporter.serve()
+        reporter.serve(notify=True)
         if exit_code != 0:
             print(f"\nTests completed with failures (exit code: {exit_code})")
             raise typer.Exit(code=exit_code)
@@ -404,6 +422,7 @@ def go(
         if mock_server:
             mock_server.stop()
             print("Mock server stopped.")
+        reporter.stop()
 
 
 @app.command()

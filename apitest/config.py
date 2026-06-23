@@ -13,6 +13,8 @@ class Config:
     llm_model: str = "claude-sonnet-4-6"
     llm_api_key: str = ""
     llm_base_url: str | None = None
+    llm_thinking_enabled: bool = True
+    llm_cache_enabled: bool = True
 
     # Input
     api_doc: str = "specs/openapi.yaml"
@@ -73,8 +75,7 @@ def load_config(path: str | None = None) -> Config:
     report = raw.get("report", {})
 
     api_key = llm.get("api_key", "")
-    api_key = _resolve_env_vars(api_key) if api_key else ""
-
+    api_key = _resolve_env_vars(api_key)
     provider = llm.get("provider", "anthropic")
 
     # Fallback: check provider-specific env vars if no key from config
@@ -98,6 +99,8 @@ def load_config(path: str | None = None) -> Config:
         llm_model=model or "claude-sonnet-4-6",
         llm_api_key=api_key,
         llm_base_url=base_url,
+        llm_thinking_enabled=llm.get("thinking_enabled", False),
+        llm_cache_enabled=llm.get("cache_enabled", True),
         api_doc=raw.get("api_doc", "specs/openapi.yaml"),
         examples_format=examples.get("format", "json"),
         examples_dir=examples.get("dir", "tests/examples"),

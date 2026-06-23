@@ -56,4 +56,4 @@ class Endpoint:
 
     @property
     def has_auth(self) -> bool:
-        return len(self.security) > 0
+        return any(req for req in self.security if req)

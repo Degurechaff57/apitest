@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "apitest"
 version = "0.1.0"
-description = "AI-powered API test automation CLI"
+description = "Generate, execute, and report on API tests from any spec — powered by LLMs"
 requires-python = ">=3.10"
 dependencies = [
     "typer>=0.9",

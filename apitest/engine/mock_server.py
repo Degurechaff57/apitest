@@ -11,6 +11,8 @@ from flask import Flask, request, jsonify
 
 from apitest.engine.fake_data import generate_fake_value as _gen_fake, _next_auto_id
 
+_HTTP_METHODS = {"get", "post", "put", "delete", "patch", "options", "head", "trace"}
+
 
 def _get_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -66,10 +68,8 @@ def create_mock_app(spec: dict) -> Flask:
     for url_path, methods in paths.items():
         flask_path = url_path.replace("{", "<").replace("}", ">")
 
-        for method in ["get", "post", "put", "delete", "patch"]:
-            operation = methods.get(method)
-            if operation is None:
-                continue
+        for method in (m for m in methods if m in _HTTP_METHODS):
+            operation = methods[method]
             _register_route(app, method, flask_path, url_path, operation, db, schemas)
 
     return app
@@ -373,6 +373,30 @@ def _register_route(app, method, flask_path, spec_path, operation, db, schemas):
                 resp = _make_response_data(operation, schemas, existing)
                 return jsonify(resp), 200
             return jsonify({"code": 400, "message": "patch requires an id"}), 400
+
+        elif method == "head":
+            # HEAD returns same headers as GET but no body — Flask handles this
+            if has_path_param:
+                resource_id = list(kwargs.values())[0] if kwargs else None
+                row = db.execute(
+                    "SELECT data FROM store WHERE resource=? AND resource_id=?",
+                    (resource, str(resource_id)),
+                ).fetchone()
+                if row:
+                    stored = json.loads(row["data"])
+                    return jsonify(_make_response_data(operation, schemas, stored)), 200
+                return jsonify(_make_response_data(operation, schemas, {"id": str(resource_id)})), 200
+            else:
+                is_list = _is_list_endpoint(operation, schemas)
+                return jsonify(_make_response_data(operation, schemas, is_list=is_list)), 200
+
+        elif method == "options":
+            # Return allowed methods as a header
+            return "", 204
+
+        elif method == "trace":
+            # Echo the request — minimal implementation
+            return jsonify({"method": "TRACE", "path": flask_path}), 200
 
     handler.__name__ = f"{method}_{flask_path}"
     app.add_url_rule(flask_path, f"{method}_{flask_path}", handler, methods=[method.upper()])
