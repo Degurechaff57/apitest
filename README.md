@@ -2,18 +2,35 @@
 
 AI-powered API test automation CLI. Give it an API document, get a test suite and Allure report.
 
-```
-API Doc → [LLM] → Test Examples → Test Plan → [You Review] → Pytest + Mock → Allure Report
+```mermaid
+graph LR
+    API[API Doc] --> LLM[LLM]
+    LLM --> Examples[Test Examples]
+    Examples --> Plan[Test Plan]
+    Plan --> Review{You Review}
+    Review --> Pytest[Pytest + Mock]
+    Pytest --> Allure[Allure Report]
 ```
 
 ## Install
 
 ```bash
-git clone <repo-url> && cd apitest
+git clone https://github.com/Degurechaff57/apitest.git && cd apitest
 uv sync
 ```
 
-Requirements: Python 3.10+, [Allure CLI](https://docs.qameta.io/allure-report/#_installing_a_commandline) (`brew install allure` on macOS).
+### Requirements
+
+Python ≥3.10 | [Allure CLI](https://docs.qameta.io/allure-report/#_installing_a_commandline) (`brew install allure`)
+
+| Library | Min | Library | Min |
+|---|---|---|---|
+| typer | 0.9 | questionary | 2.0 |
+| httpx | 0.27 | flask | 3.0 |
+| pytest | 8.0 | allure-pytest | 2.13 |
+| anthropic | 0.30 | openai | 1.30 |
+| pyyaml | 6.0 | openpyxl | 3.1 |
+| prance | 0.22 | openapi-core | 0.19 |
 
 ## Quick Start
 
@@ -191,7 +208,3 @@ Allure report: http://127.0.0.1:51235 (auto-closes when CLI exits)
 
 17 passed in 0.20s — All tests passed!
 ```
-
-## Tech Stack
-
-Python · Typer · Questionary · httpx · Pytest · Allure · Flask · Anthropic SDK · OpenAI SDK · PyYAML
